@@ -59,8 +59,12 @@ class NetworkClient:
             try:
                 msg = data.encode('utf-8')
                 length_prefix = struct.pack('>I', len(msg))
+                
+                # --- NUEVO LOG DE DEPURACIÓN ---
+                print(f"CLIENTE: Enviando {len(msg)} bytes. Prefijo HEX: {length_prefix.hex()}")
+                # --- FIN DEL LOG ---
+                
                 self.sock.sendall(length_prefix + msg)
-                # print(f"Enviado (Prefijo {len(msg)}): {data}") # DEBUG
             except Exception as e:
                 print("Error al enviar:", e)
                 
@@ -141,7 +145,7 @@ class VirusClient(arcade.Window):
         
         # UI State
         self.player_hand_sprites = arcade.SpriteList()
-        self.selected_card = None
+        self.selected_card_index = None # <---
         self.selected_card_data = None
         
         # <--- NUEVO: Variable de estado para la jugada de Trasplante ---
@@ -188,15 +192,10 @@ class VirusClient(arcade.Window):
 
                 elif action == "play_error":
                     self.status_text = f"Error: {data.get('reason')}"
-                    # Devolvemos la carta a la mano
-                    if self.selected_card_data:
-                        self.get_my_hand().insert(self.selected_card, self.selected_card_data)
-                    
-                    # <--- IMPORTANTE: Resetear estado en error ---
-                    self.selected_card = None
+                    # No hay que devolver la carta, solo resetear la selección
+                    self.selected_card_index = None # <---
                     self.selected_card_data = None
-                    self.transplant_source_color = None 
-                    self.update_hand_sprites()
+                    self.transplant_source_color = None
 
                 elif action == "play_ok":
                     self.status_text = "Jugada aceptada."
@@ -209,6 +208,13 @@ class VirusClient(arcade.Window):
                     self.status_text = "Estado actualizado."
                     self.is_my_turn = (self.game_state.get("current_player") == self.my_pid)
                     self.update_hand_sprites()
+
+                    # El servidor nos envía el estado. Si el "game_stage"
+                    # ya NO es "waiting_for_players", significa que el
+                    # juego ha comenzado y debemos ocultar el botón.
+                    game_stage = self.game_state.get("game_stage")
+                    if game_stage and game_stage != "waiting_for_players":
+                        self.start_button_list.clear()
 
             except Exception as e:
                 print("Error al interpretar JSON:", e)       
@@ -238,12 +244,32 @@ class VirusClient(arcade.Window):
         
         # Dibujar mano e info (Sin cambios)
         self.player_hand_sprites.draw()
-        for sprite in self.player_hand_sprites:
-            card = sprite.data
-            arcade.draw_text(card['name'], sprite.center_x, sprite.center_y + 10, TYPE_MAP[card['type']], 10, align="center", anchor_x="center")
-            arcade.draw_text(card['type'], sprite.center_x, sprite.center_y - 10, TYPE_MAP[card['type']], 10, align="center", anchor_x="center")
-            arcade.draw_rectangle_outline(sprite.center_x, sprite.center_y, CARD_WIDTH, CARD_HEIGHT, COLOR_MAP[card['color']], 2)
-
+        for i, sprite in enumerate(self.player_hand_sprites):
+                card = sprite.data
+                arcade.draw_text(card['name'], sprite.center_x, sprite.center_y + 10, TYPE_MAP[card['type']], 10, align="center", anchor_x="center")
+                arcade.draw_text(card['type'], sprite.center_x, sprite.center_y - 10, TYPE_MAP[card['type']], 10, align="center", anchor_x="center")
+                
+                # --- NUEVA LÓGICA DE DIBUJO ---
+                # Resaltar la carta seleccionada
+                if i == self.selected_card_index:
+                    arcade.draw_lrbt_rectangle_outline(
+                        left=sprite.center_x - CARD_WIDTH / 2 - 2,
+                        right=sprite.center_x + CARD_WIDTH / 2 + 2,
+                        bottom=sprite.center_y - CARD_HEIGHT / 2 - 2,
+                        top=sprite.center_y + CARD_HEIGHT / 2 + 2,
+                        color=arcade.color.YELLOW,
+                        border_width=4
+                    )
+                else:
+                    # Dibujar el borde normal
+                    arcade.draw_lrbt_rectangle_outline(
+                        left=sprite.center_x - CARD_WIDTH / 2,
+                        right=sprite.center_x + CARD_WIDTH / 2,
+                        bottom=sprite.center_y - CARD_HEIGHT / 2,
+                        top=sprite.center_y + CARD_HEIGHT / 2,
+                        color=COLOR_MAP[card['color']],
+                        border_width=2
+                    )
         # Dibujar estado
         turno_text = "¡Mi Turno!" if self.is_my_turn else "Turno del Oponente"
         arcade.draw_text(f"Estado: {turno_text}", 20, SCREEN_HEIGHT - 70, arcade.color.WHITE, 18)
@@ -326,24 +352,34 @@ class VirusClient(arcade.Window):
         return None
 
     def on_mouse_press(self, x, y, button, modifiers):
+        clicked_buttons = arcade.get_sprites_at_point((x, y), self.start_button_list)
+        if clicked_buttons:
+            print("Enviando START GAME...")
+            self.network.send(json.dumps({"action": "start_game"}))
+            return
+
+        # 2. Si no fue en el botón de Start, AHORA sí chequeamos si es tu turno
         if not self.is_my_turn:
             self.status_text = "No es tu turno."
             return
             
-        # 1. Chequear clic en Botón Start
-        if self.start_button.collides_with_point((x,y)):
-            print("Enviando START GAME...")
-            self.network.send(json.dumps({"action": "start_game"}))
-            return
-            
-        # 2. Chequear clic en una Carta de la Mano
+        # 3. Chequear clic en una Carta de la Mano
         cards_clicked = arcade.get_sprites_at_point((x, y), self.player_hand_sprites)
         if cards_clicked:
             clicked_card_sprite = cards_clicked[0]
-            self.selected_card = clicked_card_sprite.index
+
+            # Si hacemos clic en la carta que YA está seleccionada, la "soltamos"
+            if self.selected_card_data and self.selected_card_index == clicked_card_sprite.index:
+                self.selected_card_index = None
+                self.selected_card_data = None
+                self.transplant_source_color = None
+                self.status_text = "Selección cancelada."
+                return
+
+            # Seleccionamos la nueva carta (o cambiamos la selección)
+            self.selected_card_index = clicked_card_sprite.index
             self.selected_card_data = clicked_card_sprite.data
             
-            # <--- IMPORTANTE: Resetear estado de trasplante al elegir carta ---
             self.transplant_source_color = None 
             
             if self.selected_card_data['name'] == 'transplant':
@@ -351,11 +387,10 @@ class VirusClient(arcade.Window):
             else:
                 self.status_text = f"Carta {self.selected_card_data['name']} seleccionada. Elige un objetivo."
             
-            self.get_my_hand().pop(self.selected_card)
-            self.update_hand_sprites()
+            # NO quitamos la carta de la mano. Solo actualizamos la UI.
             return
 
-        # 3. Si ya hay una carta seleccionada, chequear clic en un Objetivo (Slot)
+        # 4. Si ya hay una carta seleccionada, chequear clic en un Objetivo (Slot)
         if self.selected_card_data:
             
             # --- Identificar dónde se hizo clic ---
@@ -419,10 +454,7 @@ class VirusClient(arcade.Window):
     def send_play_card(self, target_pid, target_color, player_color=None):
         card = self.selected_card_data
         
-        # Asignar el color del jugador si se pasó (para trasplante), si no, 'none'
         player_color_for_api = player_color if player_color else "none"
-
-        # La advertencia anterior sobre 'transplant' ya no es necesaria
 
         msg = {
             "action": "play_card",
@@ -432,17 +464,19 @@ class VirusClient(arcade.Window):
                 "color": card.get("color"),
                 "name": card.get("name")
             },
-            "player_color": player_color_for_api, # Usado en transplant
-            "target_color": target_color # El slot objetivo
+            "player_color": player_color_for_api, 
+            "target_color": target_color 
         }
         
         print(f"Enviando jugada: {msg}")
         self.network.send(json.dumps(msg))
+
+        # --- BLOQUE DE QUITAR CARTA ELIMINADO ---
+        # Ya no quitamos la carta aquí.
+        # Esperamos a que el servidor nos envíe 'update_state'.
         
-        # --- RESETEAR ESTADO DE SELECCIÓN ---
-        # Reseteamos todo, ya que la jugada fue enviada.
-        # El servidor responderá con 'play_ok' o 'play_error'.
-        self.selected_card = None
+        # --- RESETEAR ESTADO DE SELECCIÓN (SOLAMENTE) ---
+        self.selected_card_index = None
         self.selected_card_data = None
         self.transplant_source_color = None
 # ============================

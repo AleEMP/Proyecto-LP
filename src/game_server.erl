@@ -35,6 +35,12 @@ accept_loop(ListenSocket) ->
     {ok, Socket} = gen_tcp:accept(ListenSocket),
     io:format("Conexión aceptada...~n"),
     
+    % --- ¡ESTA ES LA LÍNEA CRÍTICA QUE FALTABA! ---
+    % Establecemos {packet, 4} EN EL SOCKET ACEPTADO.
+    % Ahora este socket sabe cómo manejar los prefijos de 4 bytes
+    % tanto para enviar como para recibir.
+    inet:setopts(Socket, [{packet, 4}]),
+    
     % Por cada cliente, creamos un proceso "manejador" que vivirá
     % mientras el cliente esté conectado.
     spawn(fun() -> client_handler(Socket) end),
@@ -48,71 +54,85 @@ accept_loop(ListenSocket) ->
 % Este es el proceso que representa a un jugador dentro de Erlang.
 % Su 'self()' es el PID que usará el game_manager.
 client_handler(Socket) ->
-    % 1. Configurar el socket para modo {active, true}
-    % Esto nos enviará los datos como mensajes {tcp, Socket, Data}
-    % Es crucial para poder recibir mensajes de Erlang y del socket
-    % en el mismo bucle de 'receive'.
-    inet:setopts(Socket, [{active, true}]),
+    % 1. NO activamos el socket todavía.
+    %    El socket está en modo pasivo {active, false} (heredado de 'listen')
+    %    por lo que podemos hacer llamadas de forma segura.
 
     % 2. Registrar al jugador (self()) en la lógica del juego
     case game_manager:add_player(self()) of
         ok ->
             io:format("PID ~p añadido al juego.~n", [self()]),
             
-            % 3. Enviar bienvenida al cliente
-            % ¡Importante! Le decimos al cliente cuál es su PID (como string)
-            % para que sepa quién es en los mensajes de estado.
-            WelcomeMsg = jsx:encode(#{
+            % 3. Enviar bienvenida (esto funciona en modo pasivo)
+            WelcomeMap = #{
                 action => <<"welcome">>,
                 my_pid => list_to_binary(pid_to_list(self()))
-            }),
-            send_json(Socket, WelcomeMsg),
+            },
+            send_json(Socket, WelcomeMap), % send_json usa gen_tcp:send, que es síncrono
 
-            % 4. Iniciar el bucle principal del cliente
+            % 4. ¡AHORA SÍ! Estamos listos.
+            %    Configuramos el socket a modo {active, true}
+            %    para que el client_loop pueda recibir mensajes.
+            %inet:setopts(Socket, [{active, true}]),
+            
+            % --- LOG 0 ---
+            io:format("~p: [BRIDGE] 'welcome' enviado. Entrando en client_loop...~n", [self()]),
+            
+            % 5. Iniciar el bucle principal del cliente
             client_loop(Socket);
             
         {error, max_players_reached} ->
             io:format("Rechazado: Máximo de jugadores alcanzado.~n"),
-            ErrorMsg = jsx:encode(#{action => <<"error">>, message => <<"server_full">>}),
-            send_json(Socket, ErrorMsg),
+            ErrorMap = #{action => <<"error">>, message => <<"server_full">>},
+            send_json(Socket, ErrorMap),
             gen_tcp:close(Socket);
 
         {error, game_already_in_progress} ->
             io:format("Rechazado: Juego en progreso.~n"),
-            ErrorMsg = jsx:encode(#{action => <<"error">>, message => <<"game_in_progress">>}),
-            send_json(Socket, ErrorMsg),
+            ErrorMap = #{action => <<"error">>, message => <<"game_in_progress">>},
+            send_json(Socket, ErrorMap),
             gen_tcp:close(Socket)
     end.
 
 %% Bucle principal del manejador de cliente
 client_loop(Socket) ->
+    
+    % 1. Esperar mensajes INTERNOS de Erlang (de la lógica del juego)
+    %    con un 'timeout' de 0 para que no bloquee.
     receive
-       % --------------------------------------------------
-        % A: Mensajes del Socket TCP (Vienen del Cliente Python)
-        % --------------------------------------------------
-        {tcp, Socket, Data} ->
-            handle_json_from_client(Data, Socket),
-            client_loop(Socket); % Continuar el bucle
-
-        % --------------------------------------------------
-        % B: Mensajes del Servidor de Lógica (game_manager)
-        % --------------------------------------------------
-
-        % ESTE ES EL ÚNICO MENSAJE QUE LA LÓGICA ENVÍA AHORA
         {send_json_payload, JsonMap} ->
-            send_json(Socket, JsonMap),
+            io:format("~p: [BRIDGE] Recibido payload de la lógica. Enviando a cliente...~n", [self()]),
+            send_json(Socket, JsonMap);
+
+        % --- LOG 6 (Catch-all) ---
+        UnexpectedMessage ->
+            io:format("~p: [BRIDGE] Recibido mensaje INESPERADO: ~p~n", [self(), UnexpectedMessage])
+    after 0 ->
+        % No había mensajes de Erlang, continuar...
+        ok
+    end,
+
+    % 2. Ahora, pedir activamente datos de RED (TCP)
+    %    Esto le pide al socket que nos dé datos (o espere 0ms si no hay)
+    %    Como el socket tiene {packet, 4}, gen_tcp:recv/2 leerá el
+    %    prefijo y nos devolverá SÓLO el payload.
+    case gen_tcp:recv(Socket, 0, 0) of
+        {ok, Data} ->
+            % ¡Recibimos datos de red!
+            handle_json_from_client(Data, Socket),
+            client_loop(Socket);
+        
+        {error, timeout} ->
+            % No llegaron datos de red. No pasa nada.
             client_loop(Socket);
 
-        % --------------------------------------------------
-        % C: Mensajes de Desconexión
-        % --------------------------------------------------
-        {tcp_closed, Socket} ->
-            io:format("~p: Cliente desconectado.~n", [self()]);
-            % TODO: (A futuro) Aquí deberías notificar a game_manager
-            % que este PID se fue (ej. game_manager:remove_player(self()))
-
-        {tcp_error, Socket, Reason} ->
-            io:format("~p: Error de socket ~p.~n", [self(), Reason])
+        {error, closed} ->
+            % El cliente se desconectó
+            io:format("~p: [BRIDGE] Cliente desconectado (recv closed).~n", [self()]);
+            
+        {error, Reason} ->
+            % Otro error
+            io:format("~p: [BRIDGE] Error de socket (recv): ~p.~n", [self(), Reason])
     end.
 
 %% ============================================================
@@ -121,14 +141,21 @@ client_loop(Socket) ->
 
 handle_json_from_client(Data, Socket) ->
     MyPID = self(), % El PID de este proceso es el PlayerPID
-    
+    io:format("~p: [BRIDGE] Recibido JSON crudo: ~p~n", [MyPID, Data]),
     try jsx:decode(Data, [return_maps]) of
         #{<<"action">> := <<"start_game">>} ->
-            io:format("~p: Cliente pide iniciar juego.~n", [MyPID]),
+            io:format("~p: [BRIDGE] JSON Decodificado: START_GAME. Llamando a la lógica...~n", [MyPID]),
             % Llamada síncrona al gen_server
-            game_manager:start_game(); 
+            Result = game_manager:start_game(),
             % El game_manager debería entonces enviar {your_turn} al primer jugador
-
+            case Result of
+                ok -> 
+                    % El juego comenzó bien.
+                    send_json(Socket, #{action => <<"start_ok">>});
+                {error, Reason} ->
+                    % El juego NO pudo empezar (ej. not_enough_players)
+                    send_json(Socket, #{action => <<"start_error">>, reason => Reason})
+            end;
         #{<<"action">> := <<"play_card">>,
           <<"target_pid">> := TargetPIDBin, % El cliente nos dice el PID del objetivo
           <<"card">> := CardMap,             % La carta (como mapa)
@@ -179,17 +206,16 @@ handle_json_from_client(Data, Socket) ->
 %% FUNCIÓN AUXILIAR DE ENVÍO
 %% ============================================================
 
-% Envía un mapa de Erlang como JSON, usando el formato {packet, 4}
+% Envía un mapa de Erlang como JSON.
 send_json(Socket, ErlangMap) ->
     try 
         % 1. Codificar a JSON (binario)
         Payload = jsx:encode(ErlangMap),
         
-        % 2. Crear prefijo de 4 bytes (Big-endian)
-        LengthPrefix = binary:encode_unsigned(byte_size(Payload), big),
-        
-        % 3. Enviar Prefijo + Payload
-        gen_tcp:send(Socket, [LengthPrefix, Payload])
+        % 2. Enviar SÓLO el Payload.
+        % La opción {packet, 4} que pusimos en 'accept_loop'
+        % se encarga de añadir el prefijo automáticamente.
+        gen_tcp:send(Socket, Payload)
         
     catch
         _:Error ->

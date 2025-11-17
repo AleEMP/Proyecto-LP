@@ -477,6 +477,7 @@ handle_call({add_player, PlayerPID}, _From, State) ->
     end;
 
 handle_call(start_game, _From, State) -> % <-- NUEVA CLÁUSULA
+    io:format("~p: [LOGIC] handle_call(start_game) recibido.~n", [self()]),
     CurrentPlayers = State#state.players,
     PlayerCount = length(CurrentPlayers),
 
@@ -543,8 +544,8 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
                     % Actualizar el estado con el nuevo jugador
                     NewState = StateFinal#state{
                         current_player = NextPlayerPID,
-                        game_stage = {action_phase, NextPlayerPID}
-                    },
+                        game_stage = action_phase 
+               },
                     broadcast_state(NewState),
                     % **Mecanismo de Bucle:** Enviar un mensaje interno (cast) para iniciar el turno.
                     gen_server:cast(self(), {start_turn_process, NextPlayerPID}),
@@ -582,7 +583,7 @@ handle_cast({start_turn_process, PlayerPID}, State) ->
     %PlayerPID ! {your_turn},
     
     % 3. Registrar la etapa del juego
-    NewState = StateAfterStart#state{game_stage = {action_phase, PlayerPID}},
+    NewState = StateAfterStart#state{game_stage = action_phase}, % <--- CAMBIADO
     
     broadcast_state(NewState),
 
@@ -615,8 +616,7 @@ code_change(_OldVsn, State, _Extra) ->
 %% @doc Envía el estado actual del juego a todos los jugadores.
 %% Los PIDs en State#state.players son los PIDs del 'client_handler'.
 broadcast_state(State) ->
-    io:format(" -> Transmitiendo estado a ~w jugadores...~n", [length(State#state.players)]),
-    
+    io:format("~p: [LOGIC] broadcast_state llamado. Transmitiendo a ~w jugadores.~n", [self(), length(State#state.players)]),
     % 1. Convertir el estado a un mapa JSON-friendly
     StateMap = convert_state_to_map(State),
     

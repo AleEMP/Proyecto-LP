@@ -124,7 +124,7 @@ draw_cards(N, Deck, DiscardPile) ->
                         draw_cards(N - 1, RemainingDeck, DiscardPile),
                     
                     % La carta robada actual va al frente de la cola de cartas robadas
-                    {[Card | FinalDeck], [Card | DrawnCardsTail], FinalDiscardPile}
+                    {FinalDeck, [Card | DrawnCardsTail], FinalDiscardPile}
             end
     end.
 
