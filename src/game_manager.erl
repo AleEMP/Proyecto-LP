@@ -6,6 +6,7 @@
     start_link/0,
     add_player/1,
     play_card/5,
+    discard_cards/2,
     start_game/0
 ]).
 
@@ -60,6 +61,8 @@ play_card(PlayerPID, TargetPID, Card, PlayerColor, TargetColor) ->
 start_game() -> 
     gen_server:call(game_manager, start_game).
 
+discard_cards(PlayerPID, Cards) ->
+    gen_server:call(game_manager, {discard_cards, PlayerPID, Cards}).
 %% ----------------------------------------------------
 %% Lógica de Soporte de Juego
 %% ----------------------------------------------------
@@ -197,8 +200,12 @@ apply_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State) ->
             {NewState, IsSuccessful, CardsToDiscardFromLogic} = 
                 apply_treatment_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State),
             
+            % --- CORRECCIÓN ---
+            % Las cartas de tratamiento SIEMPRE se descartan.
+            FinalCardsToDiscard = [Card | CardsToDiscardFromLogic],
+            
             if 
-                IsSuccessful -> {NewState, {ok, played, CardsToDiscardFromLogic}};
+                IsSuccessful -> {NewState, {ok, played, FinalCardsToDiscard}}; % <--- AHORA SÍ LA AÑADE
                 true -> {State, {error, invalid_treatment_target}} 
             end;
 
@@ -514,9 +521,9 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
             NewHand_NoPlayed = lists:delete(Card, PlayerHand), 
             
             % 2b. Mover la carta jugada y las cartas extirpadas a la pila de descarte.
-            AllCardsToDiscard = [Card | CardsToDiscardFromLogic],
+            AllCardsToDiscard = CardsToDiscardFromLogic, % <--- SIMPLIFICADO
             NewDiscardPile_Temp = AllCardsToDiscard ++ StateAfterMove#state.discard_pile,
-
+            
             % 2c. Robar una carta de reemplazo (1 carta).
             Deck = StateAfterMove#state.deck,
             {FinalDeck, [DrawnCard], FinalDiscardPile} = 
@@ -566,6 +573,73 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
             {reply, Reply, StateAfterMove}
     end;
 
+handle_call({discard_cards, PlayerPID, CardsFromClient}, _From, State) ->
+    % 1. Validación (¿Es tu turno?)
+    if PlayerPID /= State#state.current_player ->
+        {reply, {error, not_your_turn}, State};
+    
+    true ->
+        io:format("~p: [LOGIC] Jugador pide descartar ~w cartas.~n", [PlayerPID, length(CardsFromClient)]),
+        
+        % --- INICIO DE LA CORRECCIÓN ---
+
+        % 2. Obtener la mano REAL del jugador
+        PlayerHand = maps:get(PlayerPID, State#state.player_hands),
+            
+            % --- CORRECCIÓN AQUÍ ---
+            % Convertir los nombres de BINARIO a ÁTOMO
+            NamesToDiscard = [binary_to_atom(Card#card.name, utf8) || Card <- CardsFromClient],
+            % NamesToDiscard ahora es ['heart']
+
+            {CardsToDiscard, NewHand} = lists:partition(
+                fun(HandCard) ->
+                    % HandCard#card.name es 'heart'
+                    lists:member(HandCard#card.name, NamesToDiscard)
+            end,
+            PlayerHand
+        ),
+
+        % 5. Añadir las cartas reales descartadas a la pila de descarte
+        NewDiscardPile = CardsToDiscard ++ State#state.discard_pile,
+
+        % 6. Robar cartas nuevas (la misma cantidad que SÍ se descartó)
+        NumToDraw = length(CardsToDiscard),
+        {NewDeck, DrawnCards, FinalDiscardPile} = 
+            game_model:draw_cards(NumToDraw, State#state.deck, NewDiscardPile),
+        
+        % 7. Actualizar estado (Mano final = las que robó + las que se quedó)
+        FinalHand = DrawnCards ++ NewHand,
+        NewPlayerHands = maps:put(PlayerPID, FinalHand, State#state.player_hands),
+
+        StateAfterDiscard = State#state{
+            player_hands = NewPlayerHands,
+            deck = NewDeck,
+            discard_pile = FinalDiscardPile
+        },
+        
+        % --- FIN DE LA CORRECCIÓN ---
+
+        % 8. Es un turno completo -> pasar al siguiente jugador
+        {StateFinal, NextAction} = logic_end_turn(PlayerPID, StateAfterDiscard),
+
+        case NextAction of
+            {next_turn, NextPlayerPID} ->
+                NewState = StateFinal#state{
+                    current_player = NextPlayerPID,
+                    game_stage = action_phase
+                },
+                broadcast_state(NewState),
+                gen_server:cast(self(), {start_turn_process, NextPlayerPID}),
+                {reply, {ok, discarded_and_next_turn}, NewState};
+                
+            {game_over, WinnerPID} ->
+                NewState = StateFinal#state{
+                    game_stage = {game_over, WinnerPID}
+                },
+                broadcast_state(NewState),
+                {reply, {ok, game_over}, NewState}
+        end
+    end;
 
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_call}, State}.
@@ -584,7 +658,7 @@ handle_cast({start_turn_process, PlayerPID}, State) ->
     
     % 3. Registrar la etapa del juego
     NewState = StateAfterStart#state{game_stage = action_phase}, % <--- CAMBIADO
-    
+
     broadcast_state(NewState),
 
     {noreply, NewState};
@@ -641,7 +715,8 @@ convert_state_to_map(#state{ players = Players,
                              player_hands = PlayerHands,
                              player_boards = PlayerBoards,
                              current_player = CurrentPlayer,
-                             game_stage = GameStage
+                             game_stage = GameStage,
+                             discard_pile = DiscardPile
                            }) ->
     
     % Convertir PIDs a strings (binarios)
@@ -675,12 +750,21 @@ convert_state_to_map(#state{ players = Players,
         #{}, PlayerBoards
     ),
 
+    TopDiscardCard = 
+        case DiscardPile of
+            [TopCard | _] -> % Si hay al menos una carta
+                #{type => TopCard#card.type, color => TopCard#card.color, name => TopCard#card.name};
+            [] ->
+                'null' % Enviar 'null' si la pila está vacía
+        end,
+
     % Ensamblar el mapa de estado final
     #{
         players => PlayerPIDs_Bin,
         current_player => CurrentPlayer_Bin,
         game_stage => atom_to_binary(GameStage, utf8),
         hands => HandsMap,
-        boards => BoardsMap
+        boards => BoardsMap,
+        top_discard_card => TopDiscardCard
         % No enviamos 'deck' ni 'discard_pile' al cliente (no es necesario)
     }.

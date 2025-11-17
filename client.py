@@ -33,7 +33,7 @@ OPPONENT_BOARD_SLOTS = {
     "yellow": (750, 500),
     "wild": (900, 500),
 }
-
+DISCARD_PILE_SLOT = (1100, 350) # Centrado a la derecha
 # Colores para la UI
 COLOR_MAP = {
     "red": arcade.color.RADICAL_RED,
@@ -145,8 +145,13 @@ class VirusClient(arcade.Window):
         
         # UI State
         self.player_hand_sprites = arcade.SpriteList()
-        self.selected_card_index = None # <---
-        self.selected_card_data = None
+        
+        # Reemplazamos la selección única por selección múltiple
+        self.selected_card_indices = [] # <--- CAMBIADO
+        self.selected_card_data = None # (Esto se usa para 'play_card' normal)
+        self.selected_card_index = None
+        # <--- NUEVO ---
+        self.is_discarding = False # Nuevo estado de la UI
         
         # <--- NUEVO: Variable de estado para la jugada de Trasplante ---
         self.transplant_source_color = None # Almacena el color de nuestro órgano
@@ -245,31 +250,33 @@ class VirusClient(arcade.Window):
         # Dibujar mano e info (Sin cambios)
         self.player_hand_sprites.draw()
         for i, sprite in enumerate(self.player_hand_sprites):
-                card = sprite.data
-                arcade.draw_text(card['name'], sprite.center_x, sprite.center_y + 10, TYPE_MAP[card['type']], 10, align="center", anchor_x="center")
-                arcade.draw_text(card['type'], sprite.center_x, sprite.center_y - 10, TYPE_MAP[card['type']], 10, align="center", anchor_x="center")
-                
-                # --- NUEVA LÓGICA DE DIBUJO ---
-                # Resaltar la carta seleccionada
-                if i == self.selected_card_index:
-                    arcade.draw_lrbt_rectangle_outline(
-                        left=sprite.center_x - CARD_WIDTH / 2 - 2,
-                        right=sprite.center_x + CARD_WIDTH / 2 + 2,
-                        bottom=sprite.center_y - CARD_HEIGHT / 2 - 2,
-                        top=sprite.center_y + CARD_HEIGHT / 2 + 2,
-                        color=arcade.color.YELLOW,
-                        border_width=4
-                    )
-                else:
-                    # Dibujar el borde normal
-                    arcade.draw_lrbt_rectangle_outline(
-                        left=sprite.center_x - CARD_WIDTH / 2,
-                        right=sprite.center_x + CARD_WIDTH / 2,
-                        bottom=sprite.center_y - CARD_HEIGHT / 2,
-                        top=sprite.center_y + CARD_HEIGHT / 2,
-                        color=COLOR_MAP[card['color']],
-                        border_width=2
-                    )
+            card = sprite.data
+            arcade.draw_text(card['name'], sprite.center_x, sprite.center_y + 10, TYPE_MAP[card['type']], 10, align="center", anchor_x="center")
+            arcade.draw_text(card['type'], sprite.center_x, sprite.center_y - 10, TYPE_MAP[card['type']], 10, align="center", anchor_x="center")
+            
+            # Nueva lógica de resaltado múltiple
+            border_color = arcade.color.YELLOW
+            border_width = 4
+            
+            if i in self.selected_card_indices:
+                # Resaltar carta para descarte
+                pass # (El borde amarillo se dibuja abajo)
+            elif i == self.selected_card_index:
+                # Resaltar carta para jugar (modo normal)
+                pass # (El borde amarillo se dibuja abajo)
+            else:
+                # Borde normal
+                border_color = COLOR_MAP[card['color']]
+                border_width = 2
+
+            arcade.draw_lrbt_rectangle_outline(
+                left=sprite.center_x - CARD_WIDTH / 2 - (border_width/2),
+                right=sprite.center_x + CARD_WIDTH / 2 + (border_width/2),
+                bottom=sprite.center_y - CARD_HEIGHT / 2 - (border_width/2),
+                top=sprite.center_y + CARD_HEIGHT / 2 + (border_width/2),
+                color=border_color,
+                border_width=border_width
+            )
         # Dibujar estado
         turno_text = "¡Mi Turno!" if self.is_my_turn else "Turno del Oponente"
         arcade.draw_text(f"Estado: {turno_text}", 20, SCREEN_HEIGHT - 70, arcade.color.WHITE, 18)
@@ -295,6 +302,42 @@ class VirusClient(arcade.Window):
         opp_pid, opp_board = self.get_opponent_pid_and_board()
         if opp_pid:
             self.draw_board(opp_board, OPPONENT_BOARD_SLOTS, f"Tablero Oponente ({opp_pid[:10]}...)")
+        # <--- ACTUALIZADO: Dibujar Mazo de Descarte ---
+        dp_x, dp_y = DISCARD_PILE_SLOT
+        arcade.draw_text("Descartar", dp_x, dp_y + 70, arcade.color.WHITE, 12, anchor_x="center")
+        
+        discard_pile_color = arcade.color.YELLOW if self.is_discarding else arcade.color.GRAY
+        
+        # --- Lógica para dibujar la CARTA SUPERIOR ---
+        top_card = self.game_state.get("top_discard_card")
+        if top_card and top_card != 'null':
+            # Dibujar la carta
+            
+            # Usamos la función 'lrbt' y convertimos coordenadas
+            arcade.draw_lrbt_rectangle_filled(
+                left=dp_x - CARD_WIDTH / 2,
+                right=dp_x + CARD_WIDTH / 2,
+                bottom=dp_y - CARD_HEIGHT / 2,
+                top=dp_y + CARD_HEIGHT / 2,
+                color=TYPE_MAP[top_card['type']]
+            )
+            arcade.draw_text(top_card['name'], dp_x, dp_y, arcade.color.WHITE, 10, anchor_x="center")
+            arcade.draw_lrbt_rectangle_outline(
+                left=dp_x - CARD_WIDTH / 2, right=dp_x + CARD_WIDTH / 2,
+                bottom=dp_y - CARD_HEIGHT / 2, top=dp_y + CARD_HEIGHT / 2,
+                color=COLOR_MAP[top_card['color']], border_width=2
+            )
+        else:
+            # Dibujar el slot vacío
+            arcade.draw_lrbt_rectangle_outline(
+                left=dp_x - CARD_WIDTH / 2, right=dp_x + CARD_WIDTH / 2,
+                bottom=dp_y - CARD_HEIGHT / 2, top=dp_y + CARD_HEIGHT / 2,
+                color=discard_pile_color, border_width=3
+            )
+        
+        if self.is_discarding and len(self.selected_card_indices) > 0:
+            arcade.draw_text(f"{len(self.selected_card_indices)} / 3", dp_x, dp_y - 70, arcade.color.YELLOW, 12, anchor_x="center")
+        # <--- FIN ACTUALIZADO ---
 
     def draw_board(self, board_data, slot_positions, title):
         arcade.draw_text(title, slot_positions["red"][0] - 100, slot_positions["red"][1] + 80, arcade.color.WHITE, 14)
@@ -326,11 +369,52 @@ class VirusClient(arcade.Window):
             if state == 0:
                 arcade.draw_text("VACIO", x, y, arcade.color.GRAY, 12, anchor_x="center")
             else:
-                # Dibujar la carta superior (simplificado)
-                top_card_name = cards_in_slot[0].get("name", "CARTA") if cards_in_slot else "???"
-                top_card_type = cards_in_slot[0].get("type", "organ") if cards_in_slot else "organ"
-                arcade.draw_rectangle_filled(x, y, CARD_WIDTH, CARD_HEIGHT, TYPE_MAP[top_card_type])
-                arcade.draw_text(top_card_name, x, y, arcade.color.WHITE, 10, anchor_x="center")
+                # --- NUEVA LÓGICA DE APILAMIENTO ---
+                
+                # Invertimos la lista para dibujar el órgano (que está al final) primero
+                cards_to_draw = list(reversed(cards_in_slot))
+                
+                # (Puedes ajustar este valor para cambiar la separación)
+                STACK_OFFSET = 20 
+                
+                # Calculamos el offset base para centrar la pila verticalmente
+                stack_height = (len(cards_to_draw) - 1) * STACK_OFFSET
+                base_y = y - stack_height / 2
+                
+                y_offset = 0
+                
+                for card in cards_to_draw:
+                    card_name = card.get("name", "CARTA")
+                    card_type = card.get("type", "organ")
+                    card_color = card.get("color", "none")
+                    
+                    # Calculamos la 'y' de esta carta específica
+                    card_y = base_y + y_offset
+                    
+                    # 1. Dibujar el rectángulo relleno (el fondo)
+                    arcade.draw_lrbt_rectangle_filled(
+                        left=x - CARD_WIDTH / 2,
+                        right=x + CARD_WIDTH / 2,
+                        bottom=card_y - CARD_HEIGHT / 2,
+                        top=card_y + CARD_HEIGHT / 2,
+                        color=TYPE_MAP[card_type]
+                    )
+                    
+                    # 2. Dibujar el borde de color
+                    arcade.draw_lrbt_rectangle_outline(
+                        left=x - CARD_WIDTH / 2,
+                        right=x + CARD_WIDTH / 2,
+                        bottom=card_y - CARD_HEIGHT / 2,
+                        top=card_y + CARD_HEIGHT / 2,
+                        color=COLOR_MAP[card_color],
+                        border_width=2
+                    )
+
+                    # 3. Dibujar el nombre de la carta
+                    arcade.draw_text(card_name, x, card_y, arcade.color.WHITE, 10, anchor_x="center")
+                    
+                    # Aumentamos el offset para la siguiente carta (para que se dibuje más arriba)
+                    y_offset += STACK_OFFSET
                 
             arcade.draw_text(f"Estado: {state}", x, y - 70, arcade.color.WHITE, 12, anchor_x="center")
 
@@ -352,6 +436,8 @@ class VirusClient(arcade.Window):
         return None
 
     def on_mouse_press(self, x, y, button, modifiers):
+        
+        # 1. Chequear clic en Botón Start
         clicked_buttons = arcade.get_sprites_at_point((x, y), self.start_button_list)
         if clicked_buttons:
             print("Enviando START GAME...")
@@ -363,37 +449,60 @@ class VirusClient(arcade.Window):
             self.status_text = "No es tu turno."
             return
             
-        # 3. Chequear clic en una Carta de la Mano
+        # 3. Chequear clic en Mazo de Descarte (Botón de Modo)
+        dp_x, dp_y = DISCARD_PILE_SLOT
+        if (x > dp_x - CARD_WIDTH/2 and x < dp_x + CARD_WIDTH/2 and
+            y > dp_y - CARD_HEIGHT/2 and y < dp_y + CARD_HEIGHT/2):
+            
+            if self.is_discarding:
+                # Segundo clic: Confirmar descarte
+                self.send_discard_cards()
+            else:
+                # Primer clic: Entrar en modo descarte
+                self.is_discarding = True
+                self.selected_card_index = None # Salir de modo "jugar"
+                self.selected_card_data = None
+                self.selected_card_indices = [] # Limpiar selección múltiple
+                self.status_text = "MODO DESCARTE: Selecciona hasta 3 cartas. Clic en el mazo de descarte para confirmar."
+            return
+
+        # 4. Chequear clic en una Carta de la Mano
         cards_clicked = arcade.get_sprites_at_point((x, y), self.player_hand_sprites)
         if cards_clicked:
             clicked_card_sprite = cards_clicked[0]
-
-            # Si hacemos clic en la carta que YA está seleccionada, la "soltamos"
-            if self.selected_card_data and self.selected_card_index == clicked_card_sprite.index:
-                self.selected_card_index = None
-                self.selected_card_data = None
-                self.transplant_source_color = None
-                self.status_text = "Selección cancelada."
+            idx = clicked_card_sprite.index
+            
+            if self.is_discarding:
+                # --- Lógica de MODO DESCARTE ---
+                if idx in self.selected_card_indices:
+                    # Des-seleccionar
+                    self.selected_card_indices.remove(idx)
+                else:
+                    # Seleccionar, con límite de 3
+                    if len(self.selected_card_indices) < 3:
+                        self.selected_card_indices.append(idx)
+                    else:
+                        self.status_text = "Límite de 3 cartas para descarte."
+                return
+                
+            else:
+                # --- Lógica de MODO JUGAR (como antes) ---
+                if self.selected_card_data and self.selected_card_index == idx:
+                    self.selected_card_index = None
+                    self.selected_card_data = None
+                    self.status_text = "Selección cancelada."
+                else:
+                    self.selected_card_index = idx
+                    self.selected_card_data = clicked_card_sprite.data
+                    self.transplant_source_color = None 
+                    if self.selected_card_data['name'] == 'transplant':
+                        self.status_text = f"Trasplante: Elige TU órgano de origen."
+                    else:
+                        self.status_text = f"Carta {self.selected_card_data['name']} seleccionada. Elige un objetivo."
                 return
 
-            # Seleccionamos la nueva carta (o cambiamos la selección)
-            self.selected_card_index = clicked_card_sprite.index
-            self.selected_card_data = clicked_card_sprite.data
-            
-            self.transplant_source_color = None 
-            
-            if self.selected_card_data['name'] == 'transplant':
-                self.status_text = f"Trasplante: Elige TU órgano de origen."
-            else:
-                self.status_text = f"Carta {self.selected_card_data['name']} seleccionada. Elige un objetivo."
-            
-            # NO quitamos la carta de la mano. Solo actualizamos la UI.
-            return
-
-        # 4. Si ya hay una carta seleccionada, chequear clic en un Objetivo (Slot)
-        if self.selected_card_data:
-            
-            # --- Identificar dónde se hizo clic ---
+        # 5. Si ya hay una carta seleccionada (y NO estamos descartando), chequear Objetivo
+        if self.selected_card_data and not self.is_discarding:
             my_board_click = self.get_board_click(x, y, MY_BOARD_SLOTS, self.my_pid)
             
             opp_board_click = None
@@ -403,11 +512,8 @@ class VirusClient(arcade.Window):
 
             click_target = my_board_click or opp_board_click
 
-            # --- CASO A: LÓGICA DE TRASPLANTE (2 pasos) ---
             if self.selected_card_data['name'] == 'transplant':
                 self.handle_transplant_click(my_board_click, opp_board_click)
-            
-            # --- CASO B: LÓGICA NORMAL (1 paso) ---
             else:
                 self.handle_normal_click(click_target)
 
@@ -479,6 +585,27 @@ class VirusClient(arcade.Window):
         self.selected_card_index = None
         self.selected_card_data = None
         self.transplant_source_color = None
+
+    def send_discard_cards(self):
+        if not self.selected_card_indices:
+            self.status_text = "No hay cartas seleccionadas para descartar."
+            return
+
+        cards_to_discard = []
+        for i in self.selected_card_indices:
+            cards_to_discard.append(self.get_my_hand()[i])
+
+        msg = {
+            "action": "discard_cards",
+            "cards": cards_to_discard
+        }
+
+        print(f"Enviando descarte: {len(cards_to_discard)} cartas")
+        self.network.send(json.dumps(msg))
+
+        # Esperamos update_state, solo reseteamos la UI
+        self.selected_card_indices = []
+        self.is_discarding = False
 # ============================
 # MAIN
 # ============================

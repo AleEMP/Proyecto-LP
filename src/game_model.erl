@@ -140,8 +140,11 @@ is_valid_target(Card, TargetColor, CurrentBoard) ->
 %% @doc Verifica si la carta puede ser aplicada al color objetivo (TargetColor es un átomo, ej: red).
 is_valid_target_color(Card, TargetColor) ->
     CardColor = Card#card.color,
-    (CardColor == TargetColor) orelse (CardColor == ?WILD) orelse (CardColor == ?NONE).
-
+    % Una jugada es válida si:
+    % 1. Los colores coinciden (rojo en rojo)
+    % 2. La carta es wild (virus wild en rojo)
+    % 3. El slot es wild (rojo en slot wild)
+    (CardColor == TargetColor) orelse (CardColor == ?WILD) orelse (TargetColor == ?WILD).
 %% @doc Verifica si la carta puede ser aplicada al órgano en su estado actual (excluyendo color).
 is_valid_target_state(Card, TargetColor, CurrentBoard) ->
     % IMPORTANTE: CurrentBoard ahora mapea a #organ_slot{}

@@ -156,6 +156,31 @@ handle_json_from_client(Data, Socket) ->
                     % El juego NO pudo empezar (ej. not_enough_players)
                     send_json(Socket, #{action => <<"start_error">>, reason => Reason})
             end;
+        #{<<"action">> := <<"discard_cards">>,
+          <<"cards">> := CardMapsList % Una lista de mapas de cartas
+         } ->
+
+            io:format("~p: [BRIDGE] JSON Decodificado: DISCARD_CARDS.~n", [MyPID]),
+            
+            % --- Convertir la lista de Mapas JSON a lista de Records #card{} ---
+            CardsToDiscard = lists:map(
+                fun(CardMap) ->
+                    #card{
+                        type = maps:get(<<"type">>, CardMap),
+                        color = maps:get(<<"color">>, CardMap),
+                        name = maps:get(<<"name">>, CardMap)
+                    }
+                end,
+                CardMapsList
+            ),
+
+            % Llamar a la nueva lógica del gen_server
+            Result = game_manager:discard_cards(MyPID, CardsToDiscard),
+            
+            case Result of
+                {ok, _} -> send_json(Socket, #{action => <<"discard_ok">>});
+                {error, Reason} -> send_json(Socket, #{action => <<"discard_error">>, reason => Reason})
+            end;
         #{<<"action">> := <<"play_card">>,
           <<"target_pid">> := TargetPIDBin, % El cliente nos dice el PID del objetivo
           <<"card">> := CardMap,             % La carta (como mapa)
@@ -174,9 +199,9 @@ handle_json_from_client(Data, Socket) ->
             
             % Convertir el Mapa de carta a Record #card
             Card = #card{
-                type = maps:get(<<"type">>, CardMap),
-                color = maps:get(<<"color">>, CardMap),
-                name = maps:get(<<"name">>, CardMap)
+                type = binary_to_atom(maps:get(<<"type">>, CardMap), utf8),
+                color = binary_to_atom(maps:get(<<"color">>, CardMap), utf8),
+                name = binary_to_atom(maps:get(<<"name">>, CardMap), utf8)
             },
             
             PlayerColor = binary_to_atom(PlayerColorBin, utf8),
