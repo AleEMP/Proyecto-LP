@@ -1,4 +1,4 @@
--module(game_server).
+-module(game_manager).
 -behaviour(gen_server).
 
 % API pública
@@ -49,7 +49,7 @@
 %% ----------------------------------------------------
 
 start_link() ->
-    gen_server:start_link({local, game_manager}, ?MODULE, [], []).
+    gen_server:start_link({local, game_manager}, game_manager, [], []).
 
 add_player(PlayerPID) ->
     gen_server:call(game_manager, {add_player, PlayerPID}).
@@ -124,7 +124,8 @@ start_game(Players, State) ->
         current_player = FirstPlayer, % Establecer el jugador inicial
         game_stage = turn_in_progress
     },
-    
+
+    broadcast_state(NewState),
     % **Mecanismo de Bucle:** Enviar un mensaje interno para iniciar el primer turno.
     gen_server:cast(self(), {start_turn_process, FirstPlayer}), 
     
@@ -169,7 +170,7 @@ logic_end_turn(PlayerPID, State) ->
     % El estado 'State' ya incluye el robo de 1 carta de reemplazo realizado en handle_call
     
     % 1. Verificar condición de victoria antes de pasar el turno
-    case game_model:check_win_condition(State) of
+    case game_model:check_win_condition(State#state.player_boards) of
         {won, WinnerPID} ->
             io:format(" -> ¡VICTORIA! El jugador ~w ha ganado la partida.~n", [WinnerPID]),
             {State, {game_over, WinnerPID}};
@@ -247,10 +248,11 @@ apply_treatment_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State
                 {NState, IsS} = logic_organ_thief(PlayerPID, TargetPID, TargetColor, State),
                 {NState, IsS, []};
                 
-            %?N_CONTAGION ->
-                % TargetArg es la lista de transferencias
-            %    {NState, IsS} = logic_contagion(PlayerPID, State), %% REVISAR, ESTÁ HASTA LAS WEBAS 
-            %    {NState, IsS, []};
+           ?N_CONTAGION ->
+                % PlayerColor = Órgano de origen (tu virus)
+                % TargetColor = Órgano de destino (oponente)
+                {NState, IsS} = logic_contagion(PlayerPID, TargetPID, PlayerColor, TargetColor, State),
+                {NState, IsS, []}; % Contagio no descarta cartas del tablero
                 
             ?N_LATEX_GLOVE ->
                 % La lógica de Latex devuelve las cartas descartadas
@@ -400,7 +402,47 @@ logic_medical_error(PlayerPID, TargetPID, State) ->
     % La jugada de tratamiento es exitosa
     {NewState, true}.
 
+%% @doc Mueve un virus de PlayerPID a TargetPID.
+logic_contagion(PlayerPID, TargetPID, PlayerColor, TargetColor, State) ->
+    Boards = State#state.player_boards,
+    PlayerBoard = maps:get(PlayerPID, Boards),
+    TargetBoard = maps:get(TargetPID, Boards),
+    
+    PSlot = maps:get(PlayerColor, PlayerBoard), % Slot de origen
+    TSlot = maps:get(TargetColor, TargetBoard), % Slot de destino
 
+    % 1. Validación de Origen: ¿Tiene un virus para mover?
+    HasVirus = PSlot#organ_slot.state == -1,
+    
+    % 2. Validación de Destino: ¿Puede recibir el virus?
+    % No puede estar vacío (0) ni inmune (3)
+    CanReceive = TSlot#organ_slot.state /= 0 andalso TSlot#organ_slot.state /= 3,
+
+    if
+        HasVirus andalso CanReceive ->
+            % Ok, la jugada es válida
+            
+            % 3. Quitar el virus del origen (PSlot)
+            {VirusCard, PSlot_Cards} = game_model:remove_card_by_type(?T_VIRUS, PSlot#organ_slot.cards),
+            New_PSlot = PSlot#organ_slot{state = 1, cards = PSlot_Cards}, % Queda sano (1)
+
+            % 4. Aplicar el virus al destino (TSlot)
+            % Usamos el modelo para simular una jugada de virus
+            {New_TSlot, _Discard} = game_model:apply_virus(VirusCard, TSlot),
+
+            % 5. Actualizar tableros
+            NewPlayerBoard = maps:put(PlayerColor, New_PSlot, PlayerBoard),
+            NewTargetBoard = maps:put(TargetColor, New_TSlot, TargetBoard),
+            
+            NewBoards = maps:put(PlayerPID, NewPlayerBoard, 
+                                 maps:put(TargetPID, NewTargetBoard, Boards)),
+            
+            {State#state{player_boards = NewBoards}, true};
+            
+        true ->
+            % Jugada inválida
+            {State, false}
+    end.
 
 
 
@@ -489,21 +531,21 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
                 deck = FinalDeck,
                 discard_pile = FinalDiscardPile
             },
-            PlayerPID ! {draw, DrawnCard}, % 
+            %PlayerPID ! {draw, DrawnCard}, % 
 
             % --- FIN: GESTIÓN DE LA CARTA JUGADA ---
             
             % 3. Lógica de fin de turno (SOLO verifica victoria y pasa turno, NO roba)
             {StateFinal, NextAction} = logic_end_turn(PlayerPID, StateAfterDraw),
-            
+
             case NextAction of
                 {next_turn, NextPlayerPID} ->
                     % Actualizar el estado con el nuevo jugador
                     NewState = StateFinal#state{
                         current_player = NextPlayerPID,
-                        game_stage = waiting_for_player_action
+                        game_stage = {action_phase, NextPlayerPID}
                     },
-                    
+                    broadcast_state(NewState),
                     % **Mecanismo de Bucle:** Enviar un mensaje interno (cast) para iniciar el turno.
                     gen_server:cast(self(), {start_turn_process, NextPlayerPID}),
                     
@@ -514,6 +556,7 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
                     NewState = StateFinal#state{
                         game_stage = {game_over, WinnerPID}
                     },
+                    broadcast_state(NewState),
                     {reply, {ok, game_over}, NewState}
             end;
             
@@ -536,11 +579,13 @@ handle_cast({start_turn_process, PlayerPID}, State) ->
     {StateAfterStart, {action_phase, _}} = logic_start_turn(PlayerPID, State),
     
     % 2. Notificar al jugador que es su turno (para que el cliente envíe 'play_card')
-    PlayerPID ! {your_turn},
+    %PlayerPID ! {your_turn},
     
     % 3. Registrar la etapa del juego
     NewState = StateAfterStart#state{game_stage = {action_phase, PlayerPID}},
     
+    broadcast_state(NewState),
+
     {noreply, NewState};
 
 handle_cast(_Msg, State) ->
@@ -562,3 +607,80 @@ terminate(_Reason, _State) ->
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
+
+%% ============================================================
+%% TRANSMISIÓN DE ESTADO (BROADCASTING)
+%% ============================================================
+
+%% @doc Envía el estado actual del juego a todos los jugadores.
+%% Los PIDs en State#state.players son los PIDs del 'client_handler'.
+broadcast_state(State) ->
+    io:format(" -> Transmitiendo estado a ~w jugadores...~n", [length(State#state.players)]),
+    
+    % 1. Convertir el estado a un mapa JSON-friendly
+    StateMap = convert_state_to_map(State),
+    
+    % 2. Crear el payload final
+    Payload = #{
+        action => <<"update_state">>,
+        state => StateMap
+    },
+    
+    % 3. Enviar el payload a CADA jugador
+    lists:foreach(
+        fun(PlayerPID) ->
+            % El 'client_handler' (game_server.erl) espera este mensaje
+            % para convertirlo en JSON y enviarlo al cliente Python.
+            PlayerPID ! {send_json_payload, Payload}
+        end,
+        State#state.players
+    ).
+
+%% @doc Convierte el #state{} (con records y PIDs) a un mapa JSON-friendly.
+convert_state_to_map(#state{ players = Players,
+                             player_hands = PlayerHands,
+                             player_boards = PlayerBoards,
+                             current_player = CurrentPlayer,
+                             game_stage = GameStage
+                           }) ->
+    
+    % Convertir PIDs a strings (binarios)
+    PlayerPIDs_Bin = [list_to_binary(pid_to_list(P)) || P <- Players],
+    CurrentPlayer_Bin = list_to_binary(pid_to_list(CurrentPlayer)),
+
+    % Convertir Manos (PlayerHands): #{PID => [Card]} -> #{PIDStr => [CardMap]}
+    HandsMap = maps:fold(
+        fun(PID, Hand, Acc) ->
+            PIDStr = list_to_binary(pid_to_list(PID)),
+            CardMaps = [#{type => C#card.type, color => C#card.color, name => C#card.name} || C <- Hand],
+            Acc#{ PIDStr => CardMaps }
+        end,
+        #{}, PlayerHands
+    ),
+    
+    % Convertir Tableros (PlayerBoards): #{PID => #{Color => #organ_slot{}}}
+    BoardsMap = maps:fold(
+        fun(PID, Board, Acc) ->
+            PIDStr = list_to_binary(pid_to_list(PID)),
+            % Convertir el tablero interno (Color => #organ_slot{})
+            BoardMap = maps:map(
+                fun(_Color, Slot) ->
+                    CardMaps = [#{type => C#card.type, color => C#card.color, name => C#card.name} || C <- Slot#organ_slot.cards],
+                    #{state => Slot#organ_slot.state, cards => CardMaps}
+                end,
+                Board
+            ),
+            Acc#{ PIDStr => BoardMap }
+        end,
+        #{}, PlayerBoards
+    ),
+
+    % Ensamblar el mapa de estado final
+    #{
+        players => PlayerPIDs_Bin,
+        current_player => CurrentPlayer_Bin,
+        game_stage => atom_to_binary(GameStage, utf8),
+        hands => HandsMap,
+        boards => BoardsMap
+        % No enviamos 'deck' ni 'discard_pile' al cliente (no es necesario)
+    }.

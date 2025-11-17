@@ -5,7 +5,11 @@
     create_full_deck/0,
     print_deck/1,
     apply_card_to_board/3, % Acepta Card, TargetColor, CurrentBoard (map of #organ_slot{})
-    draw_cards/3
+    draw_cards/3,
+    check_win_condition/1,
+    next_player/2,
+    remove_card_by_type/2,
+    apply_virus/2
 ]).
 
 -include("virus_defs.hrl").
@@ -299,4 +303,48 @@ remove_card_by_type(Type, [H | T]) ->
             {Removed, [H | Rest]}
     end.
 
+%% @doc Determina el siguiente jugador en la lista.
+%% Retorna: PID del siguiente jugador.
+next_player(CurrentPlayerPID, PlayerPIDs) ->
+    % Rota la lista hasta que el jugador actual esté al frente
+    {Front, [CurrentPlayerPID | Rest]} = lists:splitwith(
+        fun(PID) -> PID =/= CurrentPlayerPID end, 
+        PlayerPIDs
+    ),
+    
+    % El siguiente jugador es el que está en 'Rest', 
+    % o el primero de la lista ('Front') si 'Rest' está vacío.
+    case Rest of
+        [NextPID | _] -> NextPID;
+        [] -> hd(Front)
+    end.
 
+
+%% @doc Verifica si algún jugador ha ganado.
+%% PlayerBoards es: #{ PID => #{Color => #organ_slot{}} }
+%% Retorna: {won, WinnerPID} | no_winner
+check_win_condition(PlayerBoards) when is_map(PlayerBoards) ->
+    check_win_condition(maps:to_list(PlayerBoards));
+
+check_win_condition([]) ->
+    no_winner;
+check_win_condition([ {PID, Board} | Rest ]) ->
+    % Contar cuántos órganos están sanos (1), protegidos (2) o inmunes (3)
+    HealthyOrgans = maps:fold(
+        fun(_Color, Slot, Acc) ->
+            case Slot#organ_slot.state of
+                1 -> Acc + 1;
+                2 -> Acc + 1;
+                3 -> Acc + 1;
+                _ -> Acc
+            end
+        end,
+        0, Board),
+    
+    % La condición de victoria es 4 órganos sanos/protegidos/inmunes.
+    % (Algunas reglas dicen 5 si tienes el órgano multicolor, 
+    % pero esta es la implementación más simple)
+    if
+        HealthyOrgans >= 4 -> {won, PID};
+        true -> check_win_condition(Rest)
+    end.
