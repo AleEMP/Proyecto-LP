@@ -1,0 +1,20 @@
+# Archivos compilados
+*.beam
+
+# Dumps de Erlang
+erl_crash.dump
+core
+
+# Archivos de Log
+*.log
+
+# Artefactos y dependencias de Rebar3 (el build tool más común)
+_build/
+deps/
+
+# Artefactos de Test (EUnit, Common Test)
+.eunit/
+.ct_logs/
+
+# Directorios de Release
+_rel/
