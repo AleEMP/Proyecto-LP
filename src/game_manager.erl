@@ -335,7 +335,7 @@ logic_organ_thief(PlayerPID, TargetPID, Color, State) ->
     IsTargetEmpty = TSlot#organ_slot.state == 0,
     
     if
-        IsImmune orelse IsPlayerDuplicate or IsTargetEmpty ->
+        IsImmune orelse IsPlayerDuplicate orelse IsTargetEmpty ->
             % La jugada es inválida
             {State, false};
             

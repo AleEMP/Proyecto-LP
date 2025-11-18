@@ -199,7 +199,8 @@ class VirusClient(arcade.Window):
         # Mapeo de nombres de cartas especiales
         # (El servidor usa 'contagion', pero la imagen es 'contaguous_card')
         special_names = {
-            "contagion": "contaguous_card",
+            # === CORRECCIÓN 10: Quitar el typo 'contagUous' ===
+            "contagion": "contaguos_card", 
             "latex_glove": "latexglove_card",
             "medical_mistake": "medicmistake_card",
             "organ_thief": "thief_card",
@@ -303,7 +304,16 @@ class VirusClient(arcade.Window):
             texture = self.get_card_texture(card_data)
             
             if texture:
-                card_sprite = arcade.Sprite(texture) # <--- CORREGIDO (sin "texture=")
+                # ==============================================================
+                # === CORRECCIÓN 1: La sintaxis es arcade.Sprite(texture=...) ===
+                # ==============================================================
+                # card_sprite = arcade.Sprite(texture=texture) # <-- Esta línea la cambiamos por las dos siguientes
+                
+                # --- NUEVO INTENTO: Crear el Sprite y ASIGNAR la textura ---
+                card_sprite = arcade.Sprite()
+                card_sprite.texture = texture
+                # --- FIN NUEVO INTENTO ---
+
                 card_sprite.width = CARD_WIDTH
                 card_sprite.height = CARD_HEIGHT
             else:
@@ -382,8 +392,19 @@ class VirusClient(arcade.Window):
             # Dibujar la textura de la carta superior
             texture = self.get_card_texture(top_card)
             if texture:
-                # Los argumentos son posicionales: (texture, center_x, center_y, width, height)
-                arcade.draw_texture_rect(texture, dp_x, dp_y, CARD_WIDTH, CARD_HEIGHT)
+                # =======================================================================
+                # === CORRECCIÓN 8: Poner el sprite en una SpriteList temporal       ===
+                # === (Sprite no tiene .draw(), SpriteList sí)                     ===
+                # =======================================================================
+                temp_list = arcade.SpriteList() # <-- NUEVO
+                temp_sprite = arcade.Sprite()
+                temp_sprite.texture = texture
+                temp_sprite.center_x = dp_x
+                temp_sprite.center_y = dp_y
+                temp_sprite.width = CARD_WIDTH
+                temp_sprite.height = CARD_HEIGHT
+                temp_list.append(temp_sprite) # <-- NUEVO
+                temp_list.draw() # <-- CAMBIADO (ahora es la lista la que dibuja)
         else:
             # Dibujar el slot vacío si no hay carta
             discard_pile_color = arcade.color.YELLOW if self.is_discarding else arcade.color.GRAY
@@ -431,9 +452,18 @@ class VirusClient(arcade.Window):
                     texture = self.get_card_texture(card) # Get the texture
                     
                     if texture:
-                        # Los argumentos son posicionales: (texture, center_x, center_y, width, height)
-                        arcade.draw_texture_rect(texture, x, card_y, CARD_WIDTH, CARD_HEIGHT) # <--- CORREGIDO
-                    
+                        # =======================================================================
+                        # === CORRECCIÓN 9: Usar SpriteList temporal también aquí          ===
+                        # =======================================================================
+                        temp_list = arcade.SpriteList() # <-- NUEVO
+                        temp_sprite = arcade.Sprite()
+                        temp_sprite.texture = texture
+                        temp_sprite.center_x = x
+                        temp_sprite.center_y = card_y
+                        temp_sprite.width = CARD_WIDTH
+                        temp_sprite.height = CARD_HEIGHT
+                        temp_list.append(temp_sprite) # <-- NUEVO
+                        temp_list.draw() # <-- CAMBIADO (ahora es la lista la que dibuja)
                     y_offset += STACK_OFFSET
             # --- FIN MODIFICADO ---
                 
