@@ -2,20 +2,20 @@
  [
   {description, "Virus Game Server"},
   {vsn, "0.1.0"},
-  {registered, [game_manager]}, % <-- Le dice a Erlang que 'game_manager' es un nombre registrado
+  {registered, [game_manager]},
   {applications,
    [
     kernel,
     stdlib,
-    jsx % <-- Importante: Declara que dependemos de jsx
+    jsx 
    ]
   },
   {env,[]},
   {modules, [
-      game_server,  % El puente TCP
-      game_manager, % La lógica gen_server
-      game_model,   % El modelo puro
-      test_ACTB     % El archivo de test
+      game_server,  
+      game_manager, 
+      game_model,   
+      test_ACTB     
   ]}
  ]
 }.

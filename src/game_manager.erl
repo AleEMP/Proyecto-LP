@@ -1,7 +1,6 @@
 -module(game_manager).
 -behaviour(gen_server).
 
-% API pública
 -export([
     start_link/0,
     add_player/1,
@@ -10,7 +9,6 @@
     start_game/0
 ]).
 
-% gen_server callbacks
 -export([
     init/1,
     handle_call/3,
@@ -26,28 +24,17 @@
 
 -include("virus_defs.hrl"). 
 
-% Asumimos un mínimo de 2 jugadores para iniciar.
-
-
-% --- Estructura del Estado del Servidor ---
 -record(state, {
     deck = [],
     discard_pile = [],
     players = [],
     player_hands = #{},
-    % player_boards ahora es: PID -> #{Color => #organ_slot{state=N, cards=[...]} }
     player_boards = #{}, 
     
-    % NUEVO: PID del jugador actual
     current_player = undefined, 
     
-    % NUEVO: El estado interno del juego (e.g., waiting_for_players, turn_in_progress)
     game_stage = waiting_for_players
 }).
-
-%% ----------------------------------------------------
-%% API (Funciones Públicas)
-%% ----------------------------------------------------
 
 start_link() ->
     gen_server:start_link({local, game_manager}, game_manager, [], []).
@@ -63,29 +50,20 @@ start_game() ->
 
 discard_cards(PlayerPID, Cards) ->
     gen_server:call(game_manager, {discard_cards, PlayerPID, Cards}).
-%% ----------------------------------------------------
-%% Lógica de Soporte de Juego
-%% ----------------------------------------------------
 
-%% @doc Define el estado inicial de un tablero de jugador: 4 órganos a 0 (vacío).
 initial_board() ->
-    % 2. ACTUALIZACIÓN: Ahora se inicializa con el registro #organ_slot{}
     lists:foldl(fun(Color, Map) -> 
-        maps:put(Color, #organ_slot{}, Map) % Inicializa con un slot vacío (state=0, cards=[])
+        maps:put(Color, #organ_slot{}, Map) 
     end, #{}, ?ORGAN_COLORS).
 
-%% @doc Reparte cartas a todos los jugadores y crea sus tableros iniciales, usando draw_cards/3.
-%% NOTA: Se ha cambiado a deal_initial_hands_and_boards/3
-%% Retorna: {RemainingDeck, FinalDiscardPile, NewPlayerHands, InitialBoards}
 deal_initial_hands_and_boards(Players, FullDeck, InitialDiscard) ->
-    CardsPerPlayer = 3, % La mano inicial es de 3 cartas
+    CardsPerPlayer = 3, 
     
-    % Inicializamos el acumulador: {MazoActual, DescarteActual, ManosActuales}
     InitialAcc = {FullDeck, InitialDiscard, #{}},
     
     {DeckAfterDeal, DiscardAfterDeal, PlayerHands} = lists:foldl(
         fun(PlayerPID, {AccDeck, AccDiscard, AccHands}) ->
-            % USAMOS game_model:draw_cards/3 para robar 3 cartas
+           
             {RemainingDeck, Hand, NewDiscard} = game_model:draw_cards(CardsPerPlayer, AccDeck, AccDiscard),
             
             NewAccHands = maps:put(PlayerPID, Hand, AccHands),
@@ -93,154 +71,118 @@ deal_initial_hands_and_boards(Players, FullDeck, InitialDiscard) ->
             {RemainingDeck, NewDiscard, NewAccHands}
         end, InitialAcc, Players),
     
-    % Asigna un tablero vacío a cada jugador
     InitialBoards = maps:from_list(lists:map(
         fun(PlayerPID) -> {PlayerPID, initial_board()} end, Players)),
     
-    % Retornamos también la pila de descarte actualizada.
     {DeckAfterDeal, DiscardAfterDeal, PlayerHands, InitialBoards}.
-
-%% ----------------------------------------------------
-%% Lógica de Inicio de Juego (Reparto)
-%% ----------------------------------------------------
 
 start_game(Players, State) ->
     io:format("--- Iniciando partida, repartiendo a ~w jugadores ---~n", [length(Players)]),
     
-    % Implementación de la lógica de reparto (USANDO LA FUNCIÓN MODIFICADA)
     {RemainingDeck, FinalDiscardPile, NewPlayerHands, InitialBoards} = 
         deal_initial_hands_and_boards(Players, State#state.deck, State#state.discard_pile),
     
-    % Elegir el primer jugador (el primero en la lista, por ejemplo)
     FirstPlayer = hd(Players), 
     
     io:format("Juego listo. Quedan ~w cartas en el mazo. El primer turno es para ~w.~n", 
               [length(RemainingDeck), FirstPlayer]),
     
-    % Retorna el nuevo estado
     NewState = State#state{
         deck = RemainingDeck,
-        discard_pile = FinalDiscardPile, % <-- IMPORTANTE: Actualizar el descarte
+        discard_pile = FinalDiscardPile, 
         player_hands = NewPlayerHands,
         player_boards = InitialBoards,
-        players = Players, % Asegurarse de que la lista esté guardada
-        current_player = FirstPlayer, % Establecer el jugador inicial
+        players = Players, 
+        current_player = FirstPlayer, 
         game_stage = turn_in_progress
     },
 
     broadcast_state(NewState),
-    % **Mecanismo de Bucle:** Enviar un mensaje interno para iniciar el primer turno.
     gen_server:cast(self(), {start_turn_process, FirstPlayer}), 
     
-    NewState. % Solo retorna el estado modificado.
-
-%% ----------------------------------------------------
-%% Lógica de Jugada (Manejo de Transición de Estados y Validación)
-%% ----------------------------------------------------
+    NewState. 
 
 logic_start_turn(PlayerPID, State) ->
     PlayerHand = maps:get(PlayerPID, State#state.player_hands),
     Deck = State#state.deck,
     DiscardPile = State#state.discard_pile,
     
-    HandLimit = 3, % Asumimos 3 cartas como límite/mano inicial
+    HandLimit = 3, 
 
     case length(PlayerHand) of
         0 ->
-            % Se activa el efecto de "turno perdido" por Guante de Látex o descarte completo.
-            % Robar la mano inicial (3 cartas).
+           
             CardsToDraw = HandLimit, 
             {NewDeck, DrawnCards, NewDiscardPile} = game_model:draw_cards(CardsToDraw, Deck, DiscardPile),
             
             io:format(" -> Jugador ~w comienza turno con mano vacía. Roba ~w cartas.~n", [PlayerPID, CardsToDraw]),
 
-            % Actualizar el estado con las cartas robadas
             NewState = State#state{
                 deck = NewDeck,
                 discard_pile = NewDiscardPile,
                 player_hands = maps:put(PlayerPID, DrawnCards, State#state.player_hands)
             },
             
-            % Después de robar, el turno continúa con la fase de acción (devolver el estado)
             {NewState, {action_phase, PlayerPID}}; 
             
         _ ->
-            % Turno normal. Se procede directamente a la fase de acción.
             {State, {action_phase, PlayerPID}}
     end.
 
 logic_end_turn(PlayerPID, State) ->
-    % El estado 'State' ya incluye el robo de 1 carta de reemplazo realizado en handle_call
-    
-    % 1. Verificar condición de victoria antes de pasar el turno
     case game_model:check_win_condition(State#state.player_boards) of
         {won, WinnerPID} ->
             io:format(" -> ¡VICTORIA! El jugador ~w ha ganado la partida.~n", [WinnerPID]),
             {State, {game_over, WinnerPID}};
         
         no_winner ->
-            % 2. Pasar al siguiente jugador
             PlayerPIDs = State#state.players,
             NextPlayerPID = game_model:next_player(PlayerPID, PlayerPIDs),
             
             io:format(" -> Turno finalizado. El siguiente jugador es ~w.~n", [NextPlayerPID]),
             
-            % Retornar el estado final y el PID del siguiente jugador para el bucle del servidor
             {State, {next_turn, NextPlayerPID}}
     end.
 
 
-%% Retorna: {NewState, {ok, played, CardsToDiscardFromLogic} | {error, Reason}}
 apply_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State) -> 
     PlayerBoards = State#state.player_boards, 
 
     case Card#card.type of
         ?T_TREATMENT ->
-            % apply_treatment_move retorna {NewState, IsSuccessful, CardsToDiscardFromLogic}
             {NewState, IsSuccessful, CardsToDiscardFromLogic} = 
                 apply_treatment_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State),
             
-            % --- CORRECCIÓN ---
-            % Las cartas de tratamiento SIEMPRE se descartan.
             FinalCardsToDiscard = [Card | CardsToDiscardFromLogic],
             
             if 
-                IsSuccessful -> {NewState, {ok, played, FinalCardsToDiscard}}; % <--- AHORA SÍ LA AÑADE
+                IsSuccessful -> {NewState, {ok, played, FinalCardsToDiscard}}; 
                 true -> {State, {error, invalid_treatment_target}} 
             end;
 
         _ -> 
-            % 1. Lógica para Organo/Virus/Medicina: 
             TargetBoard = maps:get(TargetPID, PlayerBoards),
             
-            % El modelo DEBE retornar {ok, Color, NewBoard, CardsToDiscardFromBoard}
             ValidationResult = game_model:apply_card_to_board(Card, TargetColor, TargetBoard), 
 
             case ValidationResult of
-                % El modelo retorna el nuevo tablero Y la lista de cartas extirpadas/curadas
                 {ok, _ValidColor, NewBoard, CardsToDiscardFromBoard} -> 
                     io:format("  -> Órgano afectado: ~p. Jugada válida en el cuerpo de ~p.~n", [TargetColor, TargetPID]),
                     
-                    % SOLO actualizar el tablero. El descarte y robo se hace en handle_call.
                     NewPlayerBoards = maps:put(TargetPID, NewBoard, PlayerBoards),
 
                     NewState = State#state{
                         player_boards = NewPlayerBoards 
                     },
                     
-                    % Retornar las cartas que deben ir al descarte (aparte de la carta jugada)
                     {NewState, {ok, played, CardsToDiscardFromBoard}};
 
-                % --- JUGADA INVÁLIDA ---
                 {error, Reason} ->
                     io:format("  -> ERROR: Jugada inválida. Razón: ~p. Estado sin cambios.~n", [Reason]),
                     {State, {error, Reason}}
             end
     end.
 
-
-%% @doc Aplica la lógica de las cartas de Tratamiento al estado global del juego.
-%% Retorna: {NewState, IsSuccessful::boolean(), CardsToDiscardFromLogic}
 apply_treatment_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State) ->
     CardName = Card#card.name,
     
@@ -251,28 +193,27 @@ apply_treatment_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State
                 {NState, IsS, []};
                 
             ?N_ORGAN_THIEF ->
-                % TargetArg es el Color a robar
+            
                 {NState, IsS} = logic_organ_thief(PlayerPID, TargetPID, TargetColor, State),
                 {NState, IsS, []};
                 
            ?N_CONTAGION ->
-                % PlayerColor = Órgano de origen (tu virus)
-                % TargetColor = Órgano de destino (oponente)
+
                 {NState, IsS} = logic_contagion(PlayerPID, TargetPID, PlayerColor, TargetColor, State),
-                {NState, IsS, []}; % Contagio no descarta cartas del tablero
+                {NState, IsS, []}; 
                 
             ?N_LATEX_GLOVE ->
-                % La lógica de Latex devuelve las cartas descartadas
+
                 {StateAfterGlove, DiscardedHands} = logic_latex_glove(PlayerPID, State),
                 {StateAfterGlove, true, DiscardedHands};
                 
             ?N_MEDICAL_MISTAKE ->
-                % TargetPID es el jugador cuyo tablero se intercambia
+                
                 {NState, IsS} = logic_medical_error(PlayerPID, TargetPID, State),
                 {NState, IsS, []};
                 
             _ ->
-                {State, false, []} % Tratamiento desconocido o no implementado
+                {State, false, []} 
         end,
     
     {NewState, IsSuccessful, CardsToDiscard}.
@@ -285,19 +226,14 @@ logic_transplant(PlayerPID, TargetPID, PlayerColor, TargetColor, State) ->
     PSlot = maps:get(PlayerColor, PlayerBoard),
     TSlot = maps:get(TargetColor, TargetBoard),
 
-    % 1. Validación de Inmunidad
     IsImmune = PSlot#organ_slot.state == 3 orelse TSlot#organ_slot.state == 3,
     
-    % 2. VALIDACIÓN DE DUPLICIDAD (Corregida la sintaxis de acceso al registro)
-    % P está recibiendo un órgano de color TargetColor. Falla si P ya tiene un TargetColor.
     IsPlayerDuplicate = (maps:get(TargetColor, PlayerBoard))#organ_slot.state /= 0,
     
-    % T está recibiendo un órgano de color PlayerColor. Falla si T ya tiene un PlayerColor.
     IsTargetDuplicate = (maps:get(PlayerColor, TargetBoard))#organ_slot.state /= 0,
     
     if
         IsImmune orelse IsPlayerDuplicate orelse IsTargetDuplicate ->
-            % La jugada es inválida
             {State, false};
             
         true ->
@@ -316,128 +252,90 @@ logic_transplant(PlayerPID, TargetPID, PlayerColor, TargetColor, State) ->
     end.
 
 logic_organ_thief(PlayerPID, TargetPID, Color, State) ->
-    % 1. Definición de colores y obtención de slots
     Boards = State#state.player_boards,
     PlayerBoard = maps:get(PlayerPID, Boards),
     TargetBoard = maps:get(TargetPID, Boards),
     
-    TSlot = maps:get(Color, TargetBoard), % Contenido del slot a ROBAR (del oponente)
+    TSlot = maps:get(Color, TargetBoard), 
 
-    % 2. VALIDACIONES
-    
-    % 2a. Inmunidad del Oponente: No se puede robar si el slot del oponente está INMUNE (state = 3).
     IsImmune = TSlot#organ_slot.state == 3,
     
-    % 2b. Duplicidad del Jugador: El jugador no puede robar si ya tiene un órgano de ese color. (Corregida sintaxis)
     IsPlayerDuplicate = (maps:get(Color, PlayerBoard))#organ_slot.state /= 0,
     
-    % 2c. Slot Oponente Vacío: No se puede robar un slot que ya está vacío.
     IsTargetEmpty = TSlot#organ_slot.state == 0,
     
     if
         IsImmune orelse IsPlayerDuplicate orelse IsTargetEmpty ->
-            % La jugada es inválida
             {State, false};
             
         true ->
-            % 3. EJECUCIÓN DEL ROBO
             EmptySlot = #organ_slot{state = 0, cards = []},
             
-            % 3a. TABLERO JUGADOR: El slot del Jugador (PColor/TColor) recibe el contenido robado (TSlot)
             NewPlayerBoard = maps:put(Color, TSlot, PlayerBoard), 
             
-            % 3b. TABLERO OPONENTE: El slot donado (TColor) se vacía.
             NewTargetBoard = maps:put(Color, EmptySlot, TargetBoard), 
             
-            % 4. ACTUALIZACIÓN GLOBAL
             NewBoards = maps:put(PlayerPID, NewPlayerBoard, 
                                  maps:put(TargetPID, NewTargetBoard, Boards)),
             
             {State#state{player_boards = NewBoards}, true}
     end.
 
-
-
-%% @doc Descarta las manos de todos los oponentes. Retorna {NewState, DiscardedCardsList}
 logic_latex_glove(PlayerPID, State) ->
-    % 1. Obtener los datos del estado
     AllHands = State#state.player_hands,
-    % CurrentDiscard = State#state.discard_pile, % Ya no es necesario aquí, se gestiona en handle_call
-
-    % 2. Recorrer todas las manos para descartar, excluyendo al jugador actual.
     {NewHands, DiscardedCardsList} = maps:fold(
         fun(PID, Hand, {AccHands, AccDiscard}) ->
             if PID =/= PlayerPID ->
-                % Es un Oponente: Su mano se vacía y sus cartas van a la lista de descarte temporal.
+                
                 NewAccHands = maps:put(PID, [], AccHands),
                 NewAccDiscard = Hand ++ AccDiscard,
                 {NewAccHands, NewAccDiscard};
             true ->
-                % Es el Jugador que lanzó la carta: Su mano se mantiene intacta.
+               
                 {AccHands, AccDiscard}
             end
         end, {AllHands, []}, AllHands),
 
-    % 3. Crear el nuevo estado (La gestión del descarte final se hace en apply_treatment_move/handle_call)
     NewState = State#state{
         player_hands = NewHands
-        % discard_pile se actualiza en handle_call para incluir la carta de guante de látex
     },
 
-    % Retorna el estado modificado y la lista de cartas descartadas de las manos.
     {NewState, DiscardedCardsList}.
 
 
 logic_medical_error(PlayerPID, TargetPID, State) ->
     AllBoards = State#state.player_boards,
     
-    % 1. Obtener los tableros que serán intercambiados
-    PlayerBoard = maps:get(PlayerPID, AllBoards), % Tablero del jugador que lanza la carta
-    TargetBoard = maps:get(TargetPID, AllBoards), % Tablero del jugador objetivo
-    
-    % 2. Intercambiar los tableros en el mapa global de player_boards
-    
-    % Paso A: El PID del jugador ahora apunta al tablero original del oponente
+    PlayerBoard = maps:get(PlayerPID, AllBoards),
+    TargetBoard = maps:get(TargetPID, AllBoards), 
     BoardsStep1 = maps:put(PlayerPID, TargetBoard, AllBoards),
     
-    % Paso B: El PID del oponente ahora apunta al tablero original del jugador
     BoardsStep2 = maps:put(TargetPID, PlayerBoard, BoardsStep1),
     
-    % 3. Actualizar el estado con el nuevo mapa de tableros
     NewState = State#state{player_boards = BoardsStep2},
     
-    % La jugada de tratamiento es exitosa
     {NewState, true}.
 
-%% @doc Mueve un virus de PlayerPID a TargetPID.
 logic_contagion(PlayerPID, TargetPID, PlayerColor, TargetColor, State) ->
     Boards = State#state.player_boards,
     PlayerBoard = maps:get(PlayerPID, Boards),
     TargetBoard = maps:get(TargetPID, Boards),
     
-    PSlot = maps:get(PlayerColor, PlayerBoard), % Slot de origen
-    TSlot = maps:get(TargetColor, TargetBoard), % Slot de destino
+    PSlot = maps:get(PlayerColor, PlayerBoard), 
+    TSlot = maps:get(TargetColor, TargetBoard), 
 
-    % 1. Validación de Origen: ¿Tiene un virus para mover?
     HasVirus = PSlot#organ_slot.state == -1,
     
-    % 2. Validación de Destino: ¿Puede recibir el virus?
-    % No puede estar vacío (0) ni inmune (3)
     CanReceive = TSlot#organ_slot.state /= 0 andalso TSlot#organ_slot.state /= 3,
 
     if
         HasVirus andalso CanReceive ->
-            % Ok, la jugada es válida
-            
-            % 3. Quitar el virus del origen (PSlot)
+           
             {VirusCard, PSlot_Cards} = game_model:remove_card_by_type(?T_VIRUS, PSlot#organ_slot.cards),
-            New_PSlot = PSlot#organ_slot{state = 1, cards = PSlot_Cards}, % Queda sano (1)
+            New_PSlot = PSlot#organ_slot{state = 1, cards = PSlot_Cards}, 
 
-            % 4. Aplicar el virus al destino (TSlot)
-            % Usamos el modelo para simular una jugada de virus
             {New_TSlot, _Discard} = game_model:apply_virus(VirusCard, TSlot),
 
-            % 5. Actualizar tableros
             NewPlayerBoard = maps:put(PlayerColor, New_PSlot, PlayerBoard),
             NewTargetBoard = maps:put(TargetColor, New_TSlot, TargetBoard),
             
@@ -447,24 +345,13 @@ logic_contagion(PlayerPID, TargetPID, PlayerColor, TargetColor, State) ->
             {State#state{player_boards = NewBoards}, true};
             
         true ->
-            % Jugada inválida
             {State, false}
     end.
-
-
-
-%% ----------------------------------------------------
-%% gen_server Callbacks (Lógica Interna)
-%% ----------------------------------------------------
 
 init([]) ->
     io:format("~p: Game Manager iniciando...~n", [self()]),
     FullDeck = game_model:create_and_shuffle_deck(),
     {ok, #state{deck = FullDeck}}.
-
-%% ----------------------------------------------------
-%% handle_call/3 (TODAS JUNTAS)
-%% ----------------------------------------------------
 
 handle_call({add_player, PlayerPID}, _From, State) ->
     Players = State#state.players,
@@ -483,7 +370,7 @@ handle_call({add_player, PlayerPID}, _From, State) ->
         {reply, ok, NewState} 
     end;
 
-handle_call(start_game, _From, State) -> % <-- NUEVA CLÁUSULA
+handle_call(start_game, _From, State) -> 
     io:format("~p: [LOGIC] handle_call(start_game) recibido.~n", [self()]),
     CurrentPlayers = State#state.players,
     PlayerCount = length(CurrentPlayers),
@@ -492,7 +379,7 @@ handle_call(start_game, _From, State) -> % <-- NUEVA CLÁUSULA
         {reply, {error, not_enough_players}, State};
     State#state.game_stage == waiting_for_players ->
         io:format(" -> Jugador inició el juego manualmente. Repartiendo...~n", []),
-        NewState = start_game(CurrentPlayers, State), % Llama a la lógica de inicio
+        NewState = start_game(CurrentPlayers, State), 
         {reply, ok, NewState};
     true ->
         {reply, {error, game_already_started}, State}
@@ -508,30 +395,23 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
               "-----------------------------------~n", 
               [PlayerPID, TargetPID, Card, PlayerColor, TargetColor]),
     
-    % 1. Ejecutar la jugada: Retorna {StateAfterMove, {ok, played, CardsToDiscard} | {error, Reason}}
     {StateAfterMove, Reply} = apply_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State), 
     
-    % 2. Verificar si la jugada fue exitosa
     case Reply of
         {ok, _Played, CardsToDiscardFromLogic} ->
-            % --- INICIO: GESTIÓN CENTRALIZADA DE LA CARTA JUGADA ---
-            
-            % 2a. Remover la carta jugada (Card) de la mano.
+        
             PlayerHand = maps:get(PlayerPID, StateAfterMove#state.player_hands),
             NewHand_NoPlayed = lists:delete(Card, PlayerHand), 
-            
-            % 2b. Mover la carta jugada y las cartas extirpadas a la pila de descarte.
-            AllCardsToDiscard = CardsToDiscardFromLogic, % <--- SIMPLIFICADO
+           
+            AllCardsToDiscard = CardsToDiscardFromLogic, 
             NewDiscardPile_Temp = AllCardsToDiscard ++ StateAfterMove#state.discard_pile,
             
-            % 2c. Robar una carta de reemplazo (1 carta).
             Deck = StateAfterMove#state.deck,
             {FinalDeck, [DrawnCard], FinalDiscardPile} = 
                 game_model:draw_cards(1, Deck, NewDiscardPile_Temp),
 
             NewHand = [DrawnCard | NewHand_NoPlayed],
             
-            % 2d. Actualizar el estado con los cambios de mano/mazo/descarte
             NewPlayerHands = maps:put(PlayerPID, NewHand, StateAfterMove#state.player_hands),
 
             StateAfterDraw = StateAfterMove#state{
@@ -539,28 +419,22 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
                 deck = FinalDeck,
                 discard_pile = FinalDiscardPile
             },
-            %PlayerPID ! {draw, DrawnCard}, % 
-
-            % --- FIN: GESTIÓN DE LA CARTA JUGADA ---
             
-            % 3. Lógica de fin de turno (SOLO verifica victoria y pasa turno, NO roba)
             {StateFinal, NextAction} = logic_end_turn(PlayerPID, StateAfterDraw),
 
             case NextAction of
                 {next_turn, NextPlayerPID} ->
-                    % Actualizar el estado con el nuevo jugador
                     NewState = StateFinal#state{
                         current_player = NextPlayerPID,
                         game_stage = action_phase 
                },
                     broadcast_state(NewState),
-                    % **Mecanismo de Bucle:** Enviar un mensaje interno (cast) para iniciar el turno.
                     gen_server:cast(self(), {start_turn_process, NextPlayerPID}),
                     
                     {reply, {ok, played_and_next_turn}, NewState};
                     
                 {game_over, WinnerPID} ->
-                    % El juego termina
+                
                     NewState = StateFinal#state{
                         game_stage = {game_over, WinnerPID}
                     },
@@ -569,45 +443,33 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
             end;
             
         {error, _Reason} ->
-            % Jugada inválida: el turno NO termina. El cliente debe reintentar.
             {reply, Reply, StateAfterMove}
     end;
 
 handle_call({discard_cards, PlayerPID, CardsFromClient}, _From, State) ->
-    % 1. Validación (¿Es tu turno?)
     if PlayerPID /= State#state.current_player ->
         {reply, {error, not_your_turn}, State};
     
     true ->
         io:format("~p: [LOGIC] Jugador pide descartar ~w cartas.~n", [PlayerPID, length(CardsFromClient)]),
         
-        % --- INICIO DE LA CORRECCIÓN ---
-
-        % 2. Obtener la mano REAL del jugador
         PlayerHand = maps:get(PlayerPID, State#state.player_hands),
             
-            % --- CORRECCIÓN AQUÍ ---
-            % Convertir los nombres de BINARIO a ÁTOMO
             NamesToDiscard = [binary_to_atom(Card#card.name, utf8) || Card <- CardsFromClient],
-            % NamesToDiscard ahora es ['heart']
 
             {CardsToDiscard, NewHand} = lists:partition(
                 fun(HandCard) ->
-                    % HandCard#card.name es 'heart'
                     lists:member(HandCard#card.name, NamesToDiscard)
             end,
             PlayerHand
         ),
 
-        % 5. Añadir las cartas reales descartadas a la pila de descarte
         NewDiscardPile = CardsToDiscard ++ State#state.discard_pile,
 
-        % 6. Robar cartas nuevas (la misma cantidad que SÍ se descartó)
         NumToDraw = length(CardsToDiscard),
         {NewDeck, DrawnCards, FinalDiscardPile} = 
             game_model:draw_cards(NumToDraw, State#state.deck, NewDiscardPile),
         
-        % 7. Actualizar estado (Mano final = las que robó + las que se quedó)
         FinalHand = DrawnCards ++ NewHand,
         NewPlayerHands = maps:put(PlayerPID, FinalHand, State#state.player_hands),
 
@@ -617,9 +479,6 @@ handle_call({discard_cards, PlayerPID, CardsFromClient}, _From, State) ->
             discard_pile = FinalDiscardPile
         },
         
-        % --- FIN DE LA CORRECCIÓN ---
-
-        % 8. Es un turno completo -> pasar al siguiente jugador
         {StateFinal, NextAction} = logic_end_turn(PlayerPID, StateAfterDiscard),
 
         case NextAction of
@@ -644,19 +503,10 @@ handle_call({discard_cards, PlayerPID, CardsFromClient}, _From, State) ->
 handle_call(_Request, _From, State) ->
     {reply, {error, unknown_call}, State}.
 
-%% ----------------------------------------------------
-%% handle_cast/2 (TODAS JUNTAS)
-%% ----------------------------------------------------
-
-%% @doc Maneja el mensaje para comenzar el proceso de un turno.
 handle_cast({start_turn_process, PlayerPID}, State) ->
-    % 1. Lógica de inicio de turno (Ej: robar si mano vacía)
+    
     {StateAfterStart, {action_phase, _}} = logic_start_turn(PlayerPID, State),
-    
-    % 2. Notificar al jugador que es su turno (para que el cliente envíe 'play_card')
-    %PlayerPID ! {your_turn},
-    
-    % 3. Registrar la etapa del juego
+
     NewState = StateAfterStart#state{game_stage = action_phase}, % <--- CAMBIADO
 
     broadcast_state(NewState),
@@ -666,16 +516,8 @@ handle_cast({start_turn_process, PlayerPID}, State) ->
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-%% ----------------------------------------------------
-%% handle_info/2
-%% ----------------------------------------------------
-
 handle_info(_Info, State) ->
     {noreply, State}.
-
-%% ----------------------------------------------------
-%% terminate/2 y code_change/3
-%% ----------------------------------------------------
 
 terminate(_Reason, _State) ->
     ok.
@@ -683,34 +525,22 @@ terminate(_Reason, _State) ->
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
 
-%% ============================================================
-%% TRANSMISIÓN DE ESTADO (BROADCASTING)
-%% ============================================================
-
-%% @doc Envía el estado actual del juego a todos los jugadores.
-%% Los PIDs en State#state.players son los PIDs del 'client_handler'.
 broadcast_state(State) ->
     io:format("~p: [LOGIC] broadcast_state llamado. Transmitiendo a ~w jugadores.~n", [self(), length(State#state.players)]),
-    % 1. Convertir el estado a un mapa JSON-friendly
     StateMap = convert_state_to_map(State),
     
-    % 2. Crear el payload final
     Payload = #{
         action => <<"update_state">>,
         state => StateMap
     },
     
-    % 3. Enviar el payload a CADA jugador
     lists:foreach(
         fun(PlayerPID) ->
-            % El 'client_handler' (game_server.erl) espera este mensaje
-            % para convertirlo en JSON y enviarlo al cliente Python.
             PlayerPID ! {send_json_payload, Payload}
         end,
         State#state.players
     ).
 
-%% @doc Convierte el #state{} (con records y PIDs) a un mapa JSON-friendly.
 convert_state_to_map(#state{ players = Players,
                              player_hands = PlayerHands,
                              player_boards = PlayerBoards,
@@ -719,11 +549,9 @@ convert_state_to_map(#state{ players = Players,
                              discard_pile = DiscardPile
                            }) ->
     
-    % Convertir PIDs a strings (binarios)
     PlayerPIDs_Bin = [list_to_binary(pid_to_list(P)) || P <- Players],
     CurrentPlayer_Bin = list_to_binary(pid_to_list(CurrentPlayer)),
 
-    % Convertir Manos (PlayerHands): #{PID => [Card]} -> #{PIDStr => [CardMap]}
     HandsMap = maps:fold(
         fun(PID, Hand, Acc) ->
             PIDStr = list_to_binary(pid_to_list(PID)),
@@ -733,11 +561,10 @@ convert_state_to_map(#state{ players = Players,
         #{}, PlayerHands
     ),
     
-    % Convertir Tableros (PlayerBoards): #{PID => #{Color => #organ_slot{}}}
     BoardsMap = maps:fold(
         fun(PID, Board, Acc) ->
             PIDStr = list_to_binary(pid_to_list(PID)),
-            % Convertir el tablero interno (Color => #organ_slot{})
+            
             BoardMap = maps:map(
                 fun(_Color, Slot) ->
                     CardMaps = [#{type => C#card.type, color => C#card.color, name => C#card.name} || C <- Slot#organ_slot.cards],
@@ -752,13 +579,11 @@ convert_state_to_map(#state{ players = Players,
 
     TopDiscardCard = 
         case DiscardPile of
-            [TopCard | _] -> % Si hay al menos una carta
+            [TopCard | _] -> 
                 #{type => TopCard#card.type, color => TopCard#card.color, name => TopCard#card.name};
             [] ->
-                'null' % Enviar 'null' si la pila está vacía
+                'null' 
         end,
-
-    % Ensamblar el mapa de estado final
     #{
         players => PlayerPIDs_Bin,
         current_player => CurrentPlayer_Bin,
@@ -766,5 +591,4 @@ convert_state_to_map(#state{ players = Players,
         hands => HandsMap,
         boards => BoardsMap,
         top_discard_card => TopDiscardCard
-        % No enviamos 'deck' ni 'discard_pile' al cliente (no es necesario)
     }.

@@ -1,25 +1,15 @@
-% Archivo: virus_defs.hrl
 
-%% ----------------------------------------------------
-% 1. Estructura de la Carta (Registro)
-%% ----------------------------------------------------
-
-% La estructura base de cualquier carta del juego.
 -record(card, {
-    type,       % Atomos: organ, virus, medicine, treatment
-    color,      % Atomos: red, green, blue, yellow, wild, none
-    name,       % Atomos específicos de cada subtipo (ej. heart, contagion)
-    quantity    % Número de cartas de este tipo que hay en el mazo (para inicializar)
+    type,       
+    color,     
+    name,       
+    quantity   
 }).
 
 -record(organ_slot, {
-    state = 0, % El estado numérico actual (0, 1, -1, 2, 3)
-    cards = [] % La lista de registros #card{} que componen este estado 
+    state = 0, 
+    cards = [] 
 }).
-
-%% ----------------------------------------------------
-% 2. Definiciones de Colores y Tipos (Átomos)
-%% ----------------------------------------------------
 
 % Colors
 -define(RED,     red).
@@ -34,11 +24,6 @@
 -define(T_VIRUS,     virus).
 -define(T_MEDICINE,  medicine).
 -define(T_TREATMENT, treatment).
-
-
-%% ----------------------------------------------------
-% 3. Definiciones de Nombres de Carta Específicos (Átomos)
-%% ----------------------------------------------------
 
 % Organ Names
 -define(N_HEART,   heart).
@@ -61,17 +46,13 @@
 -define(N_BONE_MEDICINE,    bone_medicine).
 -define(N_WILD_MEDICINE,    any_organ_medicine).
 
-% Specific Treatment Names (Basado en la imagen y reglas)
+% Specific Treatment Names
 -define(N_CONTAGION,        contagion).
 -define(N_ORGAN_THIEF,      organ_thief).
 -define(N_TRANSPLANT,       transplant).           
 -define(N_LATEX_GLOVE,      latex_glove).     
 -define(N_MEDICAL_MISTAKE,  medical_mistake). 
 
-
-%% ----------------------------------------------------
-% 3. Definiciones comunes
-%% ----------------------------------------------------
 -define(STARTING_HAND_SIZE, 3).
 -define(MIN_PLAYERS, 2).
 -define(MAX_PLAYERS, 6).
