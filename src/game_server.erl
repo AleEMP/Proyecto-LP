@@ -110,13 +110,13 @@ handle_json_from_client(Data, Socket) ->
             CardsToDiscard = lists:map(
                 fun(CardMap) ->
                     #card{
-                        type = maps:get(<<"type">>, CardMap),
-                        color = maps:get(<<"color">>, CardMap),
-                        name = maps:get(<<"name">>, CardMap)
+                        type = binary_to_atom(maps:get(<<"type">>, CardMap), utf8),     % ← CONVERTIR A ATOM!
+                        color = binary_to_atom(maps:get(<<"color">>, CardMap), utf8),   % ← CONVERTIR A ATOM!
+                        name = binary_to_atom(maps:get(<<"name">>, CardMap), utf8)      % ← CONVERTIR A ATOM!
                     }
                 end,
                 CardMapsList
-            ),
+         ),
 
             Result = game_manager:discard_cards(MyPID, CardsToDiscard),
             

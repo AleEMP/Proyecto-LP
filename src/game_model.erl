@@ -9,7 +9,8 @@
     check_win_condition/1,
     next_player/2,
     remove_card_by_type/2,
-    apply_virus/2
+    apply_virus/2,
+    take_exact_cards/3
 ]).
 
 -include("virus_defs.hrl").
@@ -289,4 +290,16 @@ check_win_condition([ {PID, Board} | Rest ]) ->
     if
         HealthyOrgans >= 4 -> {won, PID};
         true -> check_win_condition(Rest)
+    end.
+
+
+take_exact_cards([], PlayerHand, Acc) -> 
+    {Acc, PlayerHand};
+take_exact_cards([CardToDiscard | RestCards], PlayerHand, Acc) ->
+    case lists:member(CardToDiscard, PlayerHand) of
+        true ->
+            NewPlayerHand = lists:delete(CardToDiscard, PlayerHand),
+            take_exact_cards(RestCards, NewPlayerHand, [CardToDiscard | Acc]);
+        false ->
+            take_exact_cards(RestCards, PlayerHand, Acc)
     end.

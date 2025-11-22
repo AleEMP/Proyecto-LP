@@ -455,18 +455,23 @@ handle_call({discard_cards, PlayerPID, CardsFromClient}, _From, State) ->
         {reply, {error, not_your_turn}, State};
     
     true ->
+        io:format("=== DEBUG DESCARTE INICIO ===~n"),
+        io:format("Mano ANTES: ~p~n", [maps:get(PlayerPID, State#state.player_hands)]),
+        io:format("Cartas a descartar: ~p~n", [CardsFromClient]),
+            
+        PlayerHand = maps:get(PlayerPID, State#state.player_hands),
+        {CardsToDiscard, NewHand} = game_model:take_exact_cards(CardsFromClient, PlayerHand, []),
+        
+        io:format("Cartas descartadas: ~p~n", [CardsToDiscard]),
+        io:format("Mano DESPUÉS: ~p~n", [NewHand]),
+        io:format("=== DEBUG DESCARTE FIN ===~n"),
+        
         io:format("~p: [LOGIC] Jugador pide descartar ~w cartas.~n", [PlayerPID, length(CardsFromClient)]),
         
         PlayerHand = maps:get(PlayerPID, State#state.player_hands),
             
-            NamesToDiscard = [binary_to_atom(Card#card.name, utf8) || Card <- CardsFromClient],
-
-            {CardsToDiscard, NewHand} = lists:partition(
-                fun(HandCard) ->
-                    lists:member(HandCard#card.name, NamesToDiscard)
-            end,
-            PlayerHand
-        ),
+        % NUEVA LÓGICA: Remover exactamente las cartas que vienen del cliente
+        {CardsToDiscard, NewHand} = game_model:take_exact_cards(CardsFromClient, PlayerHand, []),
 
         NewDiscardPile = CardsToDiscard ++ State#state.discard_pile,
 
@@ -511,7 +516,7 @@ handle_cast({start_turn_process, PlayerPID}, State) ->
     
     {StateAfterStart, {action_phase, _}} = logic_start_turn(PlayerPID, State),
 
-    NewState = StateAfterStart#state{game_stage = action_phase}, % <--- CAMBIADO
+    NewState = StateAfterStart#state{game_stage = action_phase},
 
     broadcast_state(NewState),
 
