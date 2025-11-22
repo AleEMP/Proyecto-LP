@@ -226,6 +226,8 @@ logic_transplant(PlayerPID, TargetPID, PlayerColor, TargetColor, State) ->
     PSlot = maps:get(PlayerColor, PlayerBoard),
     TSlot = maps:get(TargetColor, TargetBoard),
 
+    IsEmptySlot = PSlot#organ_slot.state == 0 orelse TSlot#organ_slot.state == 0,
+
     IsImmune = PSlot#organ_slot.state == 3 orelse TSlot#organ_slot.state == 3,
     
     IsSmameColor = PlayerColor == TargetColor,
@@ -233,9 +235,9 @@ logic_transplant(PlayerPID, TargetPID, PlayerColor, TargetColor, State) ->
     IsPlayerDuplicate = (maps:get(TargetColor, PlayerBoard))#organ_slot.state /= 0,
     
     IsTargetDuplicate = (maps:get(PlayerColor, TargetBoard))#organ_slot.state /= 0,
-    
+
     if
-        IsImmune orelse (not IsSmameColor andalso (IsPlayerDuplicate orelse IsTargetDuplicate)) ->
+        IsEmptySlot orelse IsImmune orelse (not IsSmameColor andalso (IsPlayerDuplicate orelse IsTargetDuplicate)) ->
             {State, false};
             
         true ->
