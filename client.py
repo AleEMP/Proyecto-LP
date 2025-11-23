@@ -397,6 +397,12 @@ class VirusClient(arcade.Window):
         return None
 
     def on_mouse_press(self, x, y, button, modifiers):
+
+        if button == arcade.MOUSE_BUTTON_RIGHT and self.is_discarding:
+            self.is_discarding = False
+            self.selected_card_indices = []
+            self.status_text = "Modo descarte cancelado."
+            return
        
         clicked_buttons = arcade.get_sprites_at_point((x, y), self.start_button_list)
         if clicked_buttons:
@@ -447,7 +453,7 @@ class VirusClient(arcade.Window):
                     self.selected_card_data = clicked_card_sprite.data
                     self.transplant_source_color = None 
                     if self.selected_card_data['name'] == 'transplant':
-                        self.status_text = f"Trasplante: Elige TU órgano de origen."
+                        self.status_text = f"Trasplante: Elige tu órgano de origen."
                     else:
                         self.status_text = f"Carta {self.selected_card_data['name']} seleccionada. Elige un objetivo."
                 return
