@@ -123,7 +123,7 @@ logic_start_turn(PlayerPID, State) ->
                 player_hands = maps:put(PlayerPID, DrawnCards, State#state.player_hands)
             },
             
-            {NewState, {action_phase, PlayerPID}}; 
+            {NewState, {end_turn_after_draw, PlayerPID}}; 
             
         _ ->
             {State, {action_phase, PlayerPID}}
@@ -514,13 +514,28 @@ handle_call(_Request, _From, State) ->
 
 handle_cast({start_turn_process, PlayerPID}, State) ->
     
-    {StateAfterStart, {action_phase, _}} = logic_start_turn(PlayerPID, State),
+    {StateAfterStart, NextAction} = logic_start_turn(PlayerPID, State),
 
-    NewState = StateAfterStart#state{game_stage = action_phase},
-
-    broadcast_state(NewState),
-
-    {noreply, NewState};
+    case NextAction of
+        {action_phase, _} ->
+            NewState = StateAfterStart#state{game_stage = action_phase},
+            broadcast_state(NewState),
+            {noreply, NewState};
+            
+        {end_turn_after_draw, PlayerPID} ->
+            io:format(" -> Jugador ~w terminó turno después de robar 3 cartas.~n", [PlayerPID]),
+            
+            PlayerPIDs = StateAfterStart#state.players,
+            NextPlayerPID = game_model:next_player(PlayerPID, PlayerPIDs),
+            
+            NewState = StateAfterStart#state{
+                current_player = NextPlayerPID,
+                game_stage = action_phase
+            },
+            broadcast_state(NewState),
+            gen_server:cast(self(), {start_turn_process, NextPlayerPID}),
+            {noreply, NewState}
+    end;
 
 handle_cast(_Msg, State) ->
     {noreply, State}.
