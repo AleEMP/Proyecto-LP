@@ -128,7 +128,15 @@ is_valid_target(Card, TargetColor, CurrentBoard) ->
 
 is_valid_target_color(Card, TargetColor) ->
     CardColor = Card#card.color,
-    (CardColor == TargetColor) orelse (CardColor == ?WILD) orelse (TargetColor == ?WILD).
+
+    case Card#card.type of
+        ?T_ORGAN -> 
+            (CardColor == TargetColor);
+        _ ->
+            (CardColor == TargetColor) orelse (CardColor == ?WILD) orelse (TargetColor == ?WILD)
+    end.
+   
+    
 
 is_valid_target_state(Card, TargetColor, CurrentBoard) ->
     CurrentSlot = maps:get(TargetColor, CurrentBoard), 
@@ -140,10 +148,10 @@ is_valid_target_state(Card, TargetColor, CurrentBoard) ->
             CurrentState == 0;
             
         ?T_MEDICINE ->
-            CurrentState /= 3;
+            CurrentState /= 3 andalso CurrentState /= 0;
             
         ?T_VIRUS ->
-            CurrentState /= 3;
+            CurrentState /= 3 andalso CurrentState /= 0;
             
         ?T_TREATMENT ->
             true;
