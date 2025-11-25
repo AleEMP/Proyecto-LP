@@ -6,14 +6,12 @@ import struct
 import time
 from pathlib import Path 
 
+# Tamaño inicial
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
 SCREEN_TITLE = "Virus (Erlang + Arcade)"
 
 IMAGE_PATH = Path(__file__).parent / "imagenes"
-
-# Posición fija solo para el descarte (a la derecha)
-DISCARD_PILE_SLOT = (1150, 360)
 
 COLOR_MAP = {
     "red": arcade.color.RADICAL_RED,
@@ -80,7 +78,7 @@ class NetworkClient:
 
 class VirusClient(arcade.Window):
     def __init__(self, nickname):
-        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
+        super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE, resizable=True)
         arcade.set_background_color(arcade.color.DARK_BLUE_GRAY)
 
         self.nickname = nickname
@@ -93,7 +91,7 @@ class VirusClient(arcade.Window):
         self.game_state = {"hands": {}, "boards": {}, "players": [], "nicknames": {}}
         self.winner_pid = None
         
-        # --- VARIABLES DE LAYOUT DINÁMICO (Valores por defecto) ---
+        # --- VARIABLES DE LAYOUT ---
         self.card_width = 60
         self.card_height = 85
         self.card_margin = 5
@@ -101,18 +99,22 @@ class VirusClient(arcade.Window):
         self.start_y = 180
         self.start_x = 350
         self.slot_spacing = 80
-        # ----------------------------------------------------------
+        
+        # --- VARIABLES DE FUENTE DINÁMICA ---
+        self.font_small = 10
+        self.font_normal = 12
+        self.font_medium = 14
+        self.font_large = 18
+        self.font_huge = 54  # Game Over Title
+        self.font_icon = 80  # Game Over Icon
         
         self.player_hand_sprites = arcade.SpriteList()
-        
         self.selected_card_indices = []
         self.selected_card_data = None
         self.selected_card_index = None
 
         self.is_discarding = False
         self.transplant_source_color = None
-
-        # Variables Contagio
         self.is_contagion_active = False
         self.contagion_source_color = None
         self.source_is_wild = False 
@@ -126,11 +128,15 @@ class VirusClient(arcade.Window):
         self.start_button.center_y = SCREEN_HEIGHT - 50
         self.start_button_list.append(self.start_button)
 
+    # Propiedad dinámica para el mazo de descarte
+    @property
+    def discard_pile_pos(self):
+        return (self.width * 0.9, self.height * 0.5)
+
     def connect_and_join(self):
         self.network = NetworkClient(self.server_ip)
         self.network.on_message = self._process_server_message
         self.network.connect()
-        
         time.sleep(0.1)
         msg = json.dumps({"action": "join", "nickname": self.nickname})
         self.network.send(msg)
@@ -141,10 +147,8 @@ class VirusClient(arcade.Window):
         image_files = []
         for file_type in file_types:
             image_files.extend(IMAGE_PATH.glob(file_type))
-        
         if not image_files:
             print(">>> ¡ALERTA! No se encontraron imágenes.")
-
         for img_file in image_files:
             try:
                 texture = arcade.load_texture(img_file)
@@ -179,41 +183,55 @@ class VirusClient(arcade.Window):
         if not self.my_pid: return []
         return self.game_state.get("hands", {}).get(self.my_pid, [])
     
-    # --- LOGICA DE REDIMENSIONAMIENTO ---
-    def recalculate_layout(self):
-        """Ajusta tamaños según número de jugadores."""
-        num_players = len(self.game_state.get("players", []))
-        if num_players == 0: num_players = 1 # Evitar errores al inicio
+    def on_resize(self, width, height):
+        super().on_resize(width, height)
+        self.start_button.center_x = width * 0.1
+        self.start_button.center_y = height * 0.1
+        self.recalculate_layout()
+        self.update_hand_sprites()
 
-        if num_players <= 2:
-            # MODO GRANDE (2 Jugadores)
-            self.card_width = 90
-            self.card_height = 128
-            self.slot_spacing = 120
-            self.row_height = 250 # Mucho espacio vertical
-            self.start_y = 250    # Subir el tablero propio
-            self.start_x = 300
-            self.card_margin = 10
+    # --- LAYOUT Y TIPOGRAFÍA RESPONSIVA ---
+    def recalculate_layout(self):
+        num_players = len(self.game_state.get("players", []))
+        if num_players == 0: num_players = 1
+
+        # Factor de escala basado en la altura (720p como base)
+        scale_factor = self.height / 720.0
         
+        # Recalcular Fuentes
+        self.font_small = int(10 * scale_factor)
+        self.font_normal = int(12 * scale_factor)
+        self.font_medium = int(14 * scale_factor)
+        self.font_large = int(18 * scale_factor)
+        self.font_huge = int(54 * scale_factor)
+        self.font_icon = int(80 * scale_factor)
+
+        # Recalcular Tamaños de Cartas
+        if num_players <= 2:
+            # MODO GRANDE
+            pct_height = 0.20 
+            self.card_height = self.height * pct_height
+            self.row_height = self.height * 0.30
+            self.start_y = self.height * 0.35 
         elif num_players <= 4:
-            # MODO MEDIANO (3-4 Jugadores)
-            self.card_width = 70
-            self.card_height = 100
-            self.slot_spacing = 90
-            self.row_height = 140
-            self.start_y = 200
-            self.start_x = 320
-            self.card_margin = 8
-            
+            # MODO MEDIANO
+            pct_height = 0.15
+            self.card_height = self.height * pct_height
+            self.row_height = self.height * 0.18
+            self.start_y = self.height * 0.25
         else:
-            # MODO COMPACTO (5-6 Jugadores)
-            self.card_width = 55
-            self.card_height = 78
-            self.slot_spacing = 75
-            self.row_height = 95  # Apretados verticalmente
-            self.start_y = 160
-            self.start_x = 350
-            self.card_margin = 5
+            # MODO COMPACTO
+            pct_height = 0.11
+            self.card_height = self.height * pct_height
+            self.row_height = self.height * 0.13
+            self.start_y = self.height * 0.20
+
+        self.card_width = self.card_height * 0.7
+        self.slot_spacing = self.card_width * 1.3
+        self.card_margin = self.card_width * 0.1
+        
+        board_total_width = 4 * self.slot_spacing
+        self.start_x = (self.width / 2) - (board_total_width / 2)
 
     def get_player_screen_order(self):
         players = self.game_state.get("players", [])
@@ -262,11 +280,7 @@ class VirusClient(arcade.Window):
 
                 elif action == "update_state":
                     self.game_state = data.get("state")
-                    
-                    # --- RECALCULAR TAMAÑOS AL RECIBIR ESTADO ---
-                    self.recalculate_layout()
-                    # --------------------------------------------
-
+                    self.recalculate_layout() 
                     self.status_text = "Estado actualizado."
                     self.winner_pid = self.game_state.get("winner")
                     game_stage = self.game_state.get("game_stage")
@@ -303,12 +317,11 @@ class VirusClient(arcade.Window):
         my_hand = self.get_my_hand()
         
         hand_len = len(my_hand)
-        # Usamos tamaños dinámicos también para la mano
-        start_x = SCREEN_WIDTH // 2 - ((hand_len * (self.card_width + self.card_margin)) // 2) + (self.card_width // 2)
+        start_x = self.width // 2 - ((hand_len * (self.card_width + self.card_margin)) // 2) + (self.card_width // 2)
 
         for i, card_data in enumerate(my_hand):
             x = start_x + i * (self.card_width + self.card_margin)
-            y = 60 # Fijo abajo
+            y = self.height * 0.1 # Mano abajo
             texture = self.get_card_texture(card_data)
             if texture:
                 card_sprite = arcade.Sprite()
@@ -324,7 +337,7 @@ class VirusClient(arcade.Window):
             self.player_hand_sprites.append(card_sprite)
 
     def draw_game_over_screen(self):
-        arcade.draw_lrbt_rectangle_filled(0, SCREEN_WIDTH, 0, SCREEN_HEIGHT, arcade.color.BLACK)
+        arcade.draw_lrbt_rectangle_filled(0, self.width, 0, self.height, arcade.color.BLACK)
         
         if self.winner_pid == self.my_pid:
             main_text = "¡VICTORIA!"
@@ -340,14 +353,15 @@ class VirusClient(arcade.Window):
             color = arcade.color.RED_DEVIL
             icon_text = "💀"
             
-        arcade.draw_text(main_text, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 50, 
-                         color, 54, anchor_x="center", bold=True)
-        arcade.draw_text(icon_text, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 150, 
-                         color, 80, anchor_x="center")
-        arcade.draw_text(sub_text, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 20, 
-                         arcade.color.WHITE, 24, anchor_x="center")
-        arcade.draw_text("Cierra la ventana para salir", SCREEN_WIDTH/2, SCREEN_HEIGHT/2 - 100, 
-                         arcade.color.GRAY, 16, anchor_x="center")
+        # Usamos las fuentes dinámicas
+        arcade.draw_text(main_text, self.width/2, self.height/2 + 50, 
+                         color, self.font_huge, anchor_x="center", bold=True)
+        arcade.draw_text(icon_text, self.width/2, self.height/2 + 150, 
+                         color, self.font_icon, anchor_x="center")
+        arcade.draw_text(sub_text, self.width/2, self.height/2 - 20, 
+                         arcade.color.WHITE, self.font_large, anchor_x="center")
+        arcade.draw_text("Cierra la ventana para salir", self.width/2, self.height/2 - 100, 
+                         arcade.color.GRAY, self.font_medium, anchor_x="center")
 
     def on_draw(self):
         self.clear()
@@ -357,7 +371,6 @@ class VirusClient(arcade.Window):
             self.draw_game_over_screen()
             return 
 
-        # 1. Dibujar Mano
         self.player_hand_sprites.draw()
         
         for i, sprite in enumerate(self.player_hand_sprites):
@@ -378,26 +391,25 @@ class VirusClient(arcade.Window):
                 border_width=border_width
             )
 
-        # 2. Info de Estado
+        # Texto de estado (Fuente Grande)
         turno_text = "¡TU TURNO!" if self.is_my_turn else "Esperando..."
-        arcade.draw_text(f"Estado: {turno_text}", 20, SCREEN_HEIGHT - 40, arcade.color.WHITE, 18)
-        arcade.draw_text(self.status_text, 20, SCREEN_HEIGHT - 70, arcade.color.CYAN, 14)
+        arcade.draw_text(f"Estado: {turno_text}", 20, self.height - 40, arcade.color.WHITE, self.font_large)
+        # Texto de detalles (Fuente Media)
+        arcade.draw_text(self.status_text, 20, self.height - 70, arcade.color.CYAN, self.font_medium)
         
         if self.selected_card_data:
             card_name = self.selected_card_data['name']
             if self.transplant_source_color:
                 arcade.draw_text(f"Sel: {card_name} (Origen: {self.transplant_source_color})", 
-                                 20, 20, arcade.color.YELLOW, 14)
+                                 20, 20, arcade.color.YELLOW, self.font_medium)
             else:
-                arcade.draw_text(f"Sel: {card_name}", 20, 20, arcade.color.YELLOW, 14)
+                arcade.draw_text(f"Sel: {card_name}", 20, 20, arcade.color.YELLOW, self.font_medium)
 
         self.start_button_list.draw()
         arcade.draw_text("INICIAR", self.start_button.center_x, self.start_button.center_y, 
-                         arcade.color.BLACK, 12, anchor_x="center", anchor_y="center")
+                         arcade.color.BLACK, self.font_normal, anchor_x="center", anchor_y="center")
 
-        # 3. DIBUJAR TABLEROS DINÁMICOS (Con Sprites)
         board_sprites = arcade.SpriteList()
-
         sorted_players = self.get_player_screen_order()
         nicknames = self.game_state.get("nicknames", {})
         boards = self.game_state.get("boards", {})
@@ -406,21 +418,20 @@ class VirusClient(arcade.Window):
         for i, pid in enumerate(sorted_players):
             board_data = boards.get(pid, {})
             nickname = nicknames.get(pid, pid[:5])
-            
             _, base_y = self.get_slot_position(i, "red")
             
             color_text = arcade.color.GREEN if pid == self.my_pid else arcade.color.WHITE
             if pid == curr_player_pid:
                 color_text = arcade.color.YELLOW
                 nickname += " (TURNO)"
-                
-            arcade.draw_text(nickname, 20, base_y, color_text, 12, anchor_y="center")
+            
+            # Nombre del jugador (Fuente Normal)
+            arcade.draw_text(nickname, 20, base_y, color_text, self.font_normal, anchor_y="center")
 
             for color_name in ["red", "green", "blue", "yellow", "wild"]:
                 x, y = self.get_slot_position(i, color_name)
                 
                 slot_color = COLOR_MAP[color_name]
-                # Usar variables dinámicas para el contorno
                 arcade.draw_lrbt_rectangle_outline(
                     left=x - self.card_width/2, right=x + self.card_width / 2,
                     bottom=y - self.card_height / 2, top=y + self.card_height / 2,
@@ -431,7 +442,7 @@ class VirusClient(arcade.Window):
                 cards_in_slot = slot_data.get("cards", [])
                 cards_to_draw = list(reversed(cards_in_slot))
                 
-                STACK_OFFSET = 15 
+                STACK_OFFSET = self.card_height * 0.2 
                 stack_height = (len(cards_to_draw) - 1) * STACK_OFFSET if cards_to_draw else 0
                 card_base_y = y - stack_height / 2
                 
@@ -447,9 +458,9 @@ class VirusClient(arcade.Window):
                         temp_sprite.height = self.card_height
                         board_sprites.append(temp_sprite)
 
-        # 4. Mazo de Descarte (Dinámico)
-        dp_x, dp_y = DISCARD_PILE_SLOT
-        arcade.draw_text("Descarte", dp_x, dp_y + self.card_height, arcade.color.WHITE, 12, anchor_x="center")
+        dp_x, dp_y = self.discard_pile_pos
+        arcade.draw_text("Descarte", dp_x, dp_y + self.card_height * 0.6, 
+                         arcade.color.WHITE, self.font_normal, anchor_x="center")
         
         top_card = self.game_state.get("top_discard_card")
         if top_card and top_card != 'null':
@@ -471,8 +482,8 @@ class VirusClient(arcade.Window):
             )
         
         if self.is_discarding and len(self.selected_card_indices) > 0:
-            arcade.draw_text(f"{len(self.selected_card_indices)} / 3", dp_x, dp_y - 60, 
-                             arcade.color.YELLOW, 12, anchor_x="center")
+            arcade.draw_text(f"{len(self.selected_card_indices)} / 3", dp_x, dp_y - self.card_height, 
+                             arcade.color.YELLOW, self.font_normal, anchor_x="center")
 
         board_sprites.draw()
 
@@ -498,17 +509,14 @@ class VirusClient(arcade.Window):
             if clicked_slot:
                 if clicked_slot['pid'] == self.my_pid:
                     self.contagion_source_color = clicked_slot['color']
-                    
                     my_board = self.game_state['boards'][self.my_pid]
                     source_data = my_board.get(self.contagion_source_color, {})
                     cards = source_data.get('cards', [])
-                    
                     is_wild = False
                     for c in cards:
                         if c.get('type') == 'virus' and c.get('color') == 'wild':
                             is_wild = True
                             break
-                    
                     self.source_is_wild = is_wild
                     msg_extra = " (ES COMODÍN)" if is_wild else ""
                     self.status_text = f"Origen: {self.contagion_source_color.upper()}{msg_extra}. Elige víctima."
@@ -518,16 +526,12 @@ class VirusClient(arcade.Window):
                     if not self.contagion_source_color:
                         self.status_text = "Primero selecciona TU órgano infectado."
                         return
-                    
                     target_color = clicked_slot['color']
                     target_pid = clicked_slot['pid']
-                    
                     colors_match = (target_color == self.contagion_source_color)
-                    
                     if not colors_match and not self.source_is_wild:
                         self.status_text = "¡El color no coincide! (Necesitas virus comodín)"
                         return
-                    
                     msg = {
                         "action": "contagion_step",
                         "target_pid": target_pid,
@@ -541,10 +545,9 @@ class VirusClient(arcade.Window):
                     return
             return
 
-        dp_x, dp_y = DISCARD_PILE_SLOT
+        dp_x, dp_y = self.discard_pile_pos
         if (x > dp_x - self.card_width/2 and x < dp_x + self.card_width/2 and
             y > dp_y - self.card_height/2 and y < dp_y + self.card_height/2):
-            
             if self.is_discarding:
                 self.send_discard_cards()
             else:
@@ -557,9 +560,8 @@ class VirusClient(arcade.Window):
 
         cards_clicked = arcade.get_sprites_at_point((x, y), self.player_hand_sprites)
         if cards_clicked:
-            clicked_card_sprite = cards_clicked[0] 
+            clicked_card_sprite = cards_clicked[-1]
             idx = clicked_card_sprite.index
-            
             if self.is_discarding:
                 if idx in self.selected_card_indices:
                     self.selected_card_indices.remove(idx)
@@ -578,7 +580,6 @@ class VirusClient(arcade.Window):
                     self.selected_card_index = idx
                     self.selected_card_data = clicked_card_sprite.data
                     self.transplant_source_color = None 
-                    
                     c_name = self.selected_card_data['name']
                     if c_name == 'transplant':
                         self.status_text = f"Trasplante: Elige TU órgano, luego el SUYO."
@@ -588,7 +589,6 @@ class VirusClient(arcade.Window):
 
         if self.selected_card_data and not self.is_discarding:
             clicked_slot = self.get_dynamic_board_click(x, y)
-            
             if clicked_slot:
                 if self.selected_card_data['name'] == 'transplant':
                     self.handle_transplant_click_dynamic(clicked_slot)
