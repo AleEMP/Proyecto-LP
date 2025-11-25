@@ -3,11 +3,11 @@
 
 -export([
     start_link/0,
-    add_player/1,
+    add_player/2, %% CAMBIO: Arity 2 para nickname
     play_card/5,
     discard_cards/2,
     start_game/0,
-    contagion_step/4 %% NUEVO
+    contagion_step/4
 ]).
 
 -export([
@@ -29,6 +29,7 @@
     deck = [],
     discard_pile = [],
     players = [],
+    nicknames = #{}, %% CAMBIO: Guardar nombres
     player_hands = #{},
     player_boards = #{}, 
     current_player = undefined, 
@@ -38,8 +39,8 @@
 start_link() ->
     gen_server:start_link({local, game_manager}, game_manager, [], []).
 
-add_player(PlayerPID) ->
-    gen_server:call(game_manager, {add_player, PlayerPID}).
+add_player(PlayerPID, Nickname) ->
+    gen_server:call(game_manager, {add_player, PlayerPID, Nickname}).
 
 play_card(PlayerPID, TargetPID, Card, PlayerColor, TargetColor) ->
     gen_server:call(game_manager, {play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}).
@@ -52,7 +53,6 @@ discard_cards(PlayerPID, Cards) ->
 
 contagion_step(PlayerPID, TargetPID, Color, SourceColor) ->
     gen_server:call(game_manager, {contagion_step, PlayerPID, TargetPID, Color, SourceColor}).
-
 
 initial_board() ->
     lists:foldl(fun(Color, Map) -> 
@@ -164,8 +164,6 @@ apply_treatment_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State
                 {NState, IsS} = logic_organ_thief(PlayerPID, TargetPID, TargetColor, State),
                 {NState, IsS, []};
             ?N_CONTAGION ->
-                %% La logica de contagio "instantánea" ya no se usa aquí, 
-                %% porque el handle_call intercepta la carta.
                 {State, false, []}; 
             ?N_LATEX_GLOVE ->
                 {StateAfterGlove, DiscardedHands} = logic_latex_glove(PlayerPID, State),
@@ -257,7 +255,7 @@ init([]) ->
     FullDeck = game_model:create_and_shuffle_deck(),
     {ok, #state{deck = FullDeck}}.
 
-handle_call({add_player, PlayerPID}, _From, State) ->
+handle_call({add_player, PlayerPID, Nickname}, _From, State) ->
     Players = State#state.players,
     CurrentCount = length(Players),
     if CurrentCount >= ?MAX_PLAYERS ->
@@ -266,9 +264,11 @@ handle_call({add_player, PlayerPID}, _From, State) ->
     State#state.game_stage /= waiting_for_players ->
         {reply, {error, game_already_in_progress}, State};
     true ->
-        io:format("Jugador ~p unido al juego (~w/~w).~n", [PlayerPID, CurrentCount + 1, ?MAX_PLAYERS]),
+        io:format("Jugador ~s (~p) unido al juego (~w/~w).~n", [Nickname, PlayerPID, CurrentCount + 1, ?MAX_PLAYERS]),
         NewPlayers = Players ++ [PlayerPID],
-        NewState = State#state{players = NewPlayers},
+        %% CAMBIO: Guardar nickname
+        NewNicknames = maps:put(PlayerPID, list_to_binary(Nickname), State#state.nicknames),
+        NewState = State#state{players = NewPlayers, nicknames = NewNicknames},
         {reply, ok, NewState} 
     end;
 
@@ -301,6 +301,7 @@ handle_call({contagion_step, PlayerPID, TargetPID, Color, SourceColor}, _From, S
        State#state.current_player /= PlayerPID ->
          {reply, {error, not_your_turn}, State};
        true ->
+         %% CAMBIO: Pasar SourceColor y Color al modelo
          case game_model:move_virus_card(PlayerPID, TargetPID, SourceColor, Color, State#state.player_boards) of
              {ok, NewBoards} ->
                  io:format(" -> [CONTAGIO] Virus movido de ~p (~p) a ~p (~p).~n", 
@@ -396,10 +397,18 @@ convert_state_to_map(#state{ players = Players,
                              player_boards = PlayerBoards,
                              current_player = CurrentPlayer,
                              game_stage = GameStage,
-                             discard_pile = DiscardPile
+                             discard_pile = DiscardPile,
+                             nicknames = Nicknames %% CAMBIO
                            }) ->
     PlayerPIDs_Bin = [list_to_binary(pid_to_list(P)) || P <- Players],
     CurrentPlayer_Bin = list_to_binary(pid_to_list(CurrentPlayer)),
+    
+    %% CAMBIO: Serializar nicknames
+    NicknamesMap = maps:fold(fun(P, Name, Acc) -> 
+        PidStr = list_to_binary(pid_to_list(P)),
+        Acc#{PidStr => Name}
+    end, #{}, Nicknames),
+
     HandsMap = maps:fold(
         fun(PID, Hand, Acc) ->
             PIDStr = list_to_binary(pid_to_list(PID)),
@@ -429,8 +438,8 @@ convert_state_to_map(#state{ players = Players,
             [] ->
                 'null' 
         end,
-
-    %% --- FIX DEL CRASH DE VICTORIA ---
+    
+    %% CAMBIO: FIX CRASH VICTORIA
     {StageNameBin, WinnerBin} = case GameStage of
         {game_over, WinnerPID} ->
             WBin = list_to_binary(pid_to_list(WinnerPID)),
@@ -441,6 +450,7 @@ convert_state_to_map(#state{ players = Players,
 
     #{
         players => PlayerPIDs_Bin,
+        nicknames => NicknamesMap, %% Agregado
         current_player => CurrentPlayer_Bin,
         game_stage => StageNameBin,
         winner => WinnerBin,

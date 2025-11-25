@@ -10,27 +10,10 @@ SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
 SCREEN_TITLE = "Virus (Erlang + Arcade)"
 
-CARD_WIDTH = 80
-CARD_HEIGHT = 110
-CARD_MARGIN = 10
-
 IMAGE_PATH = Path(__file__).parent / "imagenes"
 
-MY_BOARD_SLOTS = {
-    "red": (300, 200),
-    "green": (450, 200),
-    "blue": (600, 200),
-    "yellow": (750, 200),
-    "wild": (900, 200),
-}
-OPPONENT_BOARD_SLOTS = {
-    "red": (300, 500),
-    "green": (450, 500),
-    "blue": (600, 500),
-    "yellow": (750, 500),
-    "wild": (900, 500),
-}
-DISCARD_PILE_SLOT = (1100, 350)
+# Posición fija solo para el descarte (a la derecha)
+DISCARD_PILE_SLOT = (1150, 360)
 
 COLOR_MAP = {
     "red": arcade.color.RADICAL_RED,
@@ -41,20 +24,12 @@ COLOR_MAP = {
     "none": arcade.color.LIGHT_GRAY,
 }
 
-TYPE_MAP = {
-    "organ": arcade.color.BLACK,
-    "virus": arcade.color.RADICAL_RED,
-    "medicine": arcade.color.BLUE_SAPPHIRE,
-    "treatment": arcade.color.PURPLE,
-}
-
 class NetworkClient:
     def send(self, data):
         if self.connected:
             try:
                 msg = data.encode('utf-8')
                 length_prefix = struct.pack('>I', len(msg))
-                print(f"CLIENTE: Enviando {len(msg)} bytes. Prefijo HEX: {length_prefix.hex()}")
                 self.sock.sendall(length_prefix + msg)
             except Exception as e:
                 print("Error al enviar:", e)
@@ -104,19 +79,29 @@ class NetworkClient:
         print("Conexión cerrada con el servidor.")
 
 class VirusClient(arcade.Window):
-    def __init__(self, server_ip):
+    def __init__(self, nickname):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
         arcade.set_background_color(arcade.color.DARK_BLUE_GRAY)
 
-        self.network = NetworkClient(server_ip)
-        self.network.on_message = self._process_server_message
-        self.network.connect()
+        self.nickname = nickname
+        self.network = None
+        self.server_ip = "127.0.0.1" 
 
         self.my_pid = None
         self.is_my_turn = False
         self.status_text = "Conectando..."
-        self.game_state = {"hands": {}, "boards": {}}
+        self.game_state = {"hands": {}, "boards": {}, "players": [], "nicknames": {}}
         self.winner_pid = None
+        
+        # --- VARIABLES DE LAYOUT DINÁMICO (Valores por defecto) ---
+        self.card_width = 60
+        self.card_height = 85
+        self.card_margin = 5
+        self.row_height = 100
+        self.start_y = 180
+        self.start_x = 350
+        self.slot_spacing = 80
+        # ----------------------------------------------------------
         
         self.player_hand_sprites = arcade.SpriteList()
         
@@ -127,10 +112,10 @@ class VirusClient(arcade.Window):
         self.is_discarding = False
         self.transplant_source_color = None
 
-        # --- VARIABLES CONTAGIO ---
+        # Variables Contagio
         self.is_contagion_active = False
         self.contagion_source_color = None
-        self.source_is_wild = False
+        self.source_is_wild = False 
 
         self.card_textures = {}
         self.load_all_textures()
@@ -141,23 +126,31 @@ class VirusClient(arcade.Window):
         self.start_button.center_y = SCREEN_HEIGHT - 50
         self.start_button_list.append(self.start_button)
 
+    def connect_and_join(self):
+        self.network = NetworkClient(self.server_ip)
+        self.network.on_message = self._process_server_message
+        self.network.connect()
+        
+        time.sleep(0.1)
+        msg = json.dumps({"action": "join", "nickname": self.nickname})
+        self.network.send(msg)
+
     def load_all_textures(self):
-        print("--- INICIANDO CLIENTE CON TEXTURAS (Versión 3.0) ---")
-        print(f"Buscando imágenes en: {IMAGE_PATH.resolve()}")
+        print("--- INICIANDO CLIENTE ---")
         file_types = ("*.png", "*.jpg", "*.jpeg")
         image_files = []
         for file_type in file_types:
             image_files.extend(IMAGE_PATH.glob(file_type))
+        
         if not image_files:
-            print(">>> ¡ALERTA! No se encontraron archivos.")
+            print(">>> ¡ALERTA! No se encontraron imágenes.")
+
         for img_file in image_files:
             try:
                 texture = arcade.load_texture(img_file)
                 self.card_textures[img_file.stem] = texture
             except Exception as e:
                 print(f"Error al cargar {img_file}: {e}")
-        print(f"Texturas cargadas con éxito: {list(self.card_textures.keys())}")
-        print("-----------------------------------------------------")
 
     def get_card_texture(self, card_data):
         card_name = card_data.get("name")
@@ -186,16 +179,67 @@ class VirusClient(arcade.Window):
         if not self.my_pid: return []
         return self.game_state.get("hands", {}).get(self.my_pid, [])
     
-    def get_my_board(self):
-        if not self.my_pid: return {}
-        return self.game_state.get("boards", {}).get(self.my_pid, {})
+    # --- LOGICA DE REDIMENSIONAMIENTO ---
+    def recalculate_layout(self):
+        """Ajusta tamaños según número de jugadores."""
+        num_players = len(self.game_state.get("players", []))
+        if num_players == 0: num_players = 1 # Evitar errores al inicio
+
+        if num_players <= 2:
+            # MODO GRANDE (2 Jugadores)
+            self.card_width = 90
+            self.card_height = 128
+            self.slot_spacing = 120
+            self.row_height = 250 # Mucho espacio vertical
+            self.start_y = 250    # Subir el tablero propio
+            self.start_x = 300
+            self.card_margin = 10
         
-    def get_opponent_pid_and_board(self):
-        if not self.my_pid: return None, {}
-        for pid, board in self.game_state.get("boards", {}).items():
-            if pid != self.my_pid:
-                return pid, board
-        return None, {}
+        elif num_players <= 4:
+            # MODO MEDIANO (3-4 Jugadores)
+            self.card_width = 70
+            self.card_height = 100
+            self.slot_spacing = 90
+            self.row_height = 140
+            self.start_y = 200
+            self.start_x = 320
+            self.card_margin = 8
+            
+        else:
+            # MODO COMPACTO (5-6 Jugadores)
+            self.card_width = 55
+            self.card_height = 78
+            self.slot_spacing = 75
+            self.row_height = 95  # Apretados verticalmente
+            self.start_y = 160
+            self.start_x = 350
+            self.card_margin = 5
+
+    def get_player_screen_order(self):
+        players = self.game_state.get("players", [])
+        if not self.my_pid or self.my_pid not in players:
+            return players
+        idx = players.index(self.my_pid)
+        return players[idx:] + players[:idx]
+
+    def get_slot_position(self, player_index, slot_name):
+        colors = ["red", "green", "blue", "yellow", "wild"]
+        if slot_name not in colors: return 0, 0
+        col_index = colors.index(slot_name)
+        
+        x = self.start_x + (col_index * self.slot_spacing)
+        y = self.start_y + (player_index * self.row_height)
+        return x, y
+
+    def get_dynamic_board_click(self, mouse_x, mouse_y):
+        sorted_players = self.get_player_screen_order()
+        for i, pid in enumerate(sorted_players):
+            for color_name in ["red", "green", "blue", "yellow", "wild"]:
+                cx, cy = self.get_slot_position(i, color_name)
+                if (mouse_x > cx - self.card_width/2 and mouse_x < cx + self.card_width/2 and
+                    mouse_y > cy - self.card_height/2 and mouse_y < cy + self.card_height/2):
+                    return {"pid": pid, "color": color_name}
+        return None
 
     def _process_server_message(self, delta_time, message):
             print(f"Servidor -> {message}")
@@ -215,12 +259,15 @@ class VirusClient(arcade.Window):
 
                 elif action == "play_ok":
                     self.status_text = "Jugada aceptada."
-                    pass
 
                 elif action == "update_state":
                     self.game_state = data.get("state")
-                    self.status_text = "Estado actualizado."
                     
+                    # --- RECALCULAR TAMAÑOS AL RECIBIR ESTADO ---
+                    self.recalculate_layout()
+                    # --------------------------------------------
+
+                    self.status_text = "Estado actualizado."
                     self.winner_pid = self.game_state.get("winner")
                     game_stage = self.game_state.get("game_stage")
                     
@@ -254,17 +301,22 @@ class VirusClient(arcade.Window):
     def update_hand_sprites(self):
         self.player_hand_sprites.clear()
         my_hand = self.get_my_hand()
+        
+        hand_len = len(my_hand)
+        # Usamos tamaños dinámicos también para la mano
+        start_x = SCREEN_WIDTH // 2 - ((hand_len * (self.card_width + self.card_margin)) // 2) + (self.card_width // 2)
+
         for i, card_data in enumerate(my_hand):
-            x = 100 + i * (CARD_WIDTH + CARD_MARGIN)
-            y = 70
+            x = start_x + i * (self.card_width + self.card_margin)
+            y = 60 # Fijo abajo
             texture = self.get_card_texture(card_data)
             if texture:
                 card_sprite = arcade.Sprite()
                 card_sprite.texture = texture
-                card_sprite.width = CARD_WIDTH
-                card_sprite.height = CARD_HEIGHT
+                card_sprite.width = self.card_width
+                card_sprite.height = self.card_height
             else:
-                card_sprite = arcade.SpriteSolidColor(CARD_WIDTH, CARD_HEIGHT, arcade.color.MAGENTA)
+                card_sprite = arcade.SpriteSolidColor(self.card_width, self.card_height, arcade.color.MAGENTA)
             card_sprite.center_x = x
             card_sprite.center_y = y
             card_sprite.data = card_data
@@ -273,6 +325,7 @@ class VirusClient(arcade.Window):
 
     def draw_game_over_screen(self):
         arcade.draw_lrbt_rectangle_filled(0, SCREEN_WIDTH, 0, SCREEN_HEIGHT, arcade.color.BLACK)
+        
         if self.winner_pid == self.my_pid:
             main_text = "¡VICTORIA!"
             sub_text = "Has completado tu cuerpo primero."
@@ -281,9 +334,12 @@ class VirusClient(arcade.Window):
         else:
             main_text = "DERROTA"
             winner_display = self.winner_pid[:10] if self.winner_pid else "Desconocido"
-            sub_text = f"El ganador ha sido: {winner_display}"
+            nicknames = self.game_state.get("nicknames", {})
+            winner_name = nicknames.get(self.winner_pid, winner_display)
+            sub_text = f"El ganador ha sido: {winner_name}"
             color = arcade.color.RED_DEVIL
             icon_text = "💀"
+            
         arcade.draw_text(main_text, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 50, 
                          color, 54, anchor_x="center", bold=True)
         arcade.draw_text(icon_text, SCREEN_WIDTH/2, SCREEN_HEIGHT/2 + 150, 
@@ -301,7 +357,9 @@ class VirusClient(arcade.Window):
             self.draw_game_over_screen()
             return 
 
+        # 1. Dibujar Mano
         self.player_hand_sprites.draw()
+        
         for i, sprite in enumerate(self.player_hand_sprites):
             border_color = arcade.color.YELLOW
             border_width = 4
@@ -320,96 +378,103 @@ class VirusClient(arcade.Window):
                 border_width=border_width
             )
 
-        turno_text = "¡Mi Turno!" if self.is_my_turn else "Turno del Oponente"
-        arcade.draw_text(f"Estado: {turno_text}", 20, SCREEN_HEIGHT - 70, arcade.color.WHITE, 18)
-        arcade.draw_text(self.status_text, 20, SCREEN_HEIGHT - 100, arcade.color.CYAN, 16)
+        # 2. Info de Estado
+        turno_text = "¡TU TURNO!" if self.is_my_turn else "Esperando..."
+        arcade.draw_text(f"Estado: {turno_text}", 20, SCREEN_HEIGHT - 40, arcade.color.WHITE, 18)
+        arcade.draw_text(self.status_text, 20, SCREEN_HEIGHT - 70, arcade.color.CYAN, 14)
         
         if self.selected_card_data:
+            card_name = self.selected_card_data['name']
             if self.transplant_source_color:
-                arcade.draw_text(f"Seleccionado: {self.selected_card_data['name']} (Origen: {self.transplant_source_color})", 
-                                 20, 20, arcade.color.YELLOW, 16)
+                arcade.draw_text(f"Sel: {card_name} (Origen: {self.transplant_source_color})", 
+                                 20, 20, arcade.color.YELLOW, 14)
             else:
-                arcade.draw_text(f"Seleccionado: {self.selected_card_data['name']}", 
-                                 20, 20, arcade.color.YELLOW, 16)
+                arcade.draw_text(f"Sel: {card_name}", 20, 20, arcade.color.YELLOW, 14)
 
         self.start_button_list.draw()
-        arcade.draw_text("START GAME", self.start_button.center_x, self.start_button.center_y, arcade.color.BLACK, 14, anchor_x="center", anchor_y="center")
+        arcade.draw_text("INICIAR", self.start_button.center_x, self.start_button.center_y, 
+                         arcade.color.BLACK, 12, anchor_x="center", anchor_y="center")
 
-        self.draw_board(self.get_my_board(), MY_BOARD_SLOTS, "Mi Tablero")
-        opp_pid, opp_board = self.get_opponent_pid_and_board()
-        if opp_pid:
-            self.draw_board(opp_board, OPPONENT_BOARD_SLOTS, f"Tablero Oponente ({opp_pid[:10]}...)")
-        
+        # 3. DIBUJAR TABLEROS DINÁMICOS (Con Sprites)
+        board_sprites = arcade.SpriteList()
+
+        sorted_players = self.get_player_screen_order()
+        nicknames = self.game_state.get("nicknames", {})
+        boards = self.game_state.get("boards", {})
+        curr_player_pid = self.game_state.get("current_player")
+
+        for i, pid in enumerate(sorted_players):
+            board_data = boards.get(pid, {})
+            nickname = nicknames.get(pid, pid[:5])
+            
+            _, base_y = self.get_slot_position(i, "red")
+            
+            color_text = arcade.color.GREEN if pid == self.my_pid else arcade.color.WHITE
+            if pid == curr_player_pid:
+                color_text = arcade.color.YELLOW
+                nickname += " (TURNO)"
+                
+            arcade.draw_text(nickname, 20, base_y, color_text, 12, anchor_y="center")
+
+            for color_name in ["red", "green", "blue", "yellow", "wild"]:
+                x, y = self.get_slot_position(i, color_name)
+                
+                slot_color = COLOR_MAP[color_name]
+                # Usar variables dinámicas para el contorno
+                arcade.draw_lrbt_rectangle_outline(
+                    left=x - self.card_width/2, right=x + self.card_width / 2,
+                    bottom=y - self.card_height / 2, top=y + self.card_height / 2,
+                    color=slot_color, border_width=2
+                )
+                
+                slot_data = board_data.get(color_name, {"state": 0, "cards": []})
+                cards_in_slot = slot_data.get("cards", [])
+                cards_to_draw = list(reversed(cards_in_slot))
+                
+                STACK_OFFSET = 15 
+                stack_height = (len(cards_to_draw) - 1) * STACK_OFFSET if cards_to_draw else 0
+                card_base_y = y - stack_height / 2
+                
+                for idx_c, card in enumerate(cards_to_draw):
+                    cy = card_base_y + (idx_c * STACK_OFFSET)
+                    texture = self.get_card_texture(card) 
+                    if texture:
+                        temp_sprite = arcade.Sprite()
+                        temp_sprite.texture = texture
+                        temp_sprite.center_x = x
+                        temp_sprite.center_y = cy
+                        temp_sprite.width = self.card_width
+                        temp_sprite.height = self.card_height
+                        board_sprites.append(temp_sprite)
+
+        # 4. Mazo de Descarte (Dinámico)
         dp_x, dp_y = DISCARD_PILE_SLOT
-        arcade.draw_text("Descartar", dp_x, dp_y + 70, arcade.color.WHITE, 12, anchor_x="center")
+        arcade.draw_text("Descarte", dp_x, dp_y + self.card_height, arcade.color.WHITE, 12, anchor_x="center")
         
         top_card = self.game_state.get("top_discard_card")
         if top_card and top_card != 'null':
             texture = self.get_card_texture(top_card)
             if texture:
-                temp_list = arcade.SpriteList()
                 temp_sprite = arcade.Sprite()
                 temp_sprite.texture = texture
                 temp_sprite.center_x = dp_x
                 temp_sprite.center_y = dp_y
-                temp_sprite.width = CARD_WIDTH
-                temp_sprite.height = CARD_HEIGHT
-                temp_list.append(temp_sprite) 
-                temp_list.draw()
+                temp_sprite.width = self.card_width
+                temp_sprite.height = self.card_height
+                board_sprites.append(temp_sprite)
         else:
-            discard_pile_color = arcade.color.YELLOW if self.is_discarding else arcade.color.GRAY
+            pile_color = arcade.color.YELLOW if self.is_discarding else arcade.color.GRAY
             arcade.draw_lrbt_rectangle_outline(
-                left=dp_x - CARD_WIDTH / 2, right=dp_x + CARD_WIDTH / 2,
-                bottom=dp_y - CARD_HEIGHT / 2, top=dp_y + CARD_HEIGHT / 2,
-                color=discard_pile_color, border_width=3
+                left=dp_x - self.card_width / 2, right=dp_x + self.card_width / 2,
+                bottom=dp_y - self.card_height / 2, top=dp_y + self.card_height / 2,
+                color=pile_color, border_width=3
             )
         
         if self.is_discarding and len(self.selected_card_indices) > 0:
-            arcade.draw_text(f"{len(self.selected_card_indices)} / 3", dp_x, dp_y - 70, arcade.color.YELLOW, 12, anchor_x="center")
+            arcade.draw_text(f"{len(self.selected_card_indices)} / 3", dp_x, dp_y - 60, 
+                             arcade.color.YELLOW, 12, anchor_x="center")
 
-    def draw_board(self, board_data, slot_positions, title):
-        arcade.draw_text(title, slot_positions["red"][0] - 100, slot_positions["red"][1] + 80, arcade.color.WHITE, 14)
-        for color, (x, y) in slot_positions.items():
-            slot_data = board_data.get(color, {"state": 0, "cards": []})
-            state = slot_data.get("state", 0)
-            cards_in_slot = slot_data.get("cards", [])
-            slot_color = COLOR_MAP[color]
-            arcade.draw_lrbt_rectangle_outline(
-                left=x - CARD_WIDTH / 2, right=x + CARD_WIDTH / 2,
-                bottom=y - CARD_HEIGHT / 2, top=y + CARD_HEIGHT / 2,
-                color=slot_color, border_width=2
-            )
-            arcade.draw_text(color, x, y + 70, slot_color, 12, anchor_x="center")
-            if state == 0:
-                arcade.draw_text("VACIO", x, y, arcade.color.GRAY, 12, anchor_x="center")
-            else:
-                cards_to_draw = list(reversed(cards_in_slot))
-                STACK_OFFSET = 20 
-                stack_height = (len(cards_to_draw) - 1) * STACK_OFFSET
-                base_y = y - stack_height / 2
-                y_offset = 0
-                for card in cards_to_draw:
-                    card_y = base_y + y_offset
-                    texture = self.get_card_texture(card) 
-                    if texture:
-                        temp_list = arcade.SpriteList() 
-                        temp_sprite = arcade.Sprite()
-                        temp_sprite.texture = texture
-                        temp_sprite.center_x = x
-                        temp_sprite.center_y = card_y
-                        temp_sprite.width = CARD_WIDTH
-                        temp_sprite.height = CARD_HEIGHT
-                        temp_list.append(temp_sprite) 
-                        temp_list.draw() 
-                    y_offset += STACK_OFFSET
-            arcade.draw_text(f"Estado: {state}", x, y - 70, arcade.color.WHITE, 12, anchor_x="center")
-
-    def get_board_click(self, x, y, slot_map, owner_pid):
-        for color, (cx, cy) in slot_map.items():
-            if (x > cx - CARD_WIDTH/2 and x < cx + CARD_WIDTH/2 and
-                y > cy - CARD_HEIGHT/2 and y < cy + CARD_HEIGHT/2):
-                return {"pid": owner_pid, "color": color}
-        return None
+        board_sprites.draw()
 
     def on_mouse_press(self, x, y, button, modifiers):
         if button == arcade.MOUSE_BUTTON_RIGHT and self.is_discarding:
@@ -428,47 +493,44 @@ class VirusClient(arcade.Window):
             self.status_text = "No es tu turno."
             return
 
-        # --- LÓGICA DE CLICKS PARA CONTAGIO ---
         if self.is_contagion_active:
-            my_click = self.get_board_click(x, y, MY_BOARD_SLOTS, self.my_pid)
-            if my_click:
-                self.contagion_source_color = my_click['color']
-                
-                # Detectar si es Wild
-                my_board = self.game_state['boards'][self.my_pid]
-                source_slot = my_board.get(self.contagion_source_color)
-                cards = source_slot.get('cards', [])
-                is_wild = False
-                for c in cards:
-                    if c['type'] == 'virus' and c['color'] == 'wild':
-                        is_wild = True
-                        break
-                
-                self.source_is_wild = is_wild
-                msg_extra = " (COMODÍN)" if is_wild else ""
-                self.status_text = f"Virus origen: {self.contagion_source_color.upper()}{msg_extra}. Elige víctima."
-                return
+            clicked_slot = self.get_dynamic_board_click(x, y)
+            if clicked_slot:
+                if clicked_slot['pid'] == self.my_pid:
+                    self.contagion_source_color = clicked_slot['color']
+                    
+                    my_board = self.game_state['boards'][self.my_pid]
+                    source_data = my_board.get(self.contagion_source_color, {})
+                    cards = source_data.get('cards', [])
+                    
+                    is_wild = False
+                    for c in cards:
+                        if c.get('type') == 'virus' and c.get('color') == 'wild':
+                            is_wild = True
+                            break
+                    
+                    self.source_is_wild = is_wild
+                    msg_extra = " (ES COMODÍN)" if is_wild else ""
+                    self.status_text = f"Origen: {self.contagion_source_color.upper()}{msg_extra}. Elige víctima."
+                    return
 
-            opp_pid, _ = self.get_opponent_pid_and_board()
-            if opp_pid:
-                opp_click = self.get_board_click(x, y, OPPONENT_BOARD_SLOTS, opp_pid)
-                if opp_click:
+                elif clicked_slot['pid'] != self.my_pid:
                     if not self.contagion_source_color:
                         self.status_text = "Primero selecciona TU órgano infectado."
                         return
                     
-                    target_color = opp_click['color']
+                    target_color = clicked_slot['color']
+                    target_pid = clicked_slot['pid']
                     
                     colors_match = (target_color == self.contagion_source_color)
-                    wild_authorized = getattr(self, 'source_is_wild', False)
                     
-                    if not colors_match and not wild_authorized:
-                        self.status_text = "¡El color debe coincidir (o usar virus comodín)!"
+                    if not colors_match and not self.source_is_wild:
+                        self.status_text = "¡El color no coincide! (Necesitas virus comodín)"
                         return
                     
                     msg = {
                         "action": "contagion_step",
-                        "target_pid": opp_pid,
+                        "target_pid": target_pid,
                         "color": target_color,
                         "source_color": self.contagion_source_color
                     }
@@ -476,12 +538,12 @@ class VirusClient(arcade.Window):
                     self.network.send(json.dumps(msg))
                     self.contagion_source_color = None
                     self.source_is_wild = False
+                    return
             return
-        # --------------------------------------
 
         dp_x, dp_y = DISCARD_PILE_SLOT
-        if (x > dp_x - CARD_WIDTH/2 and x < dp_x + CARD_WIDTH/2 and
-            y > dp_y - CARD_HEIGHT/2 and y < dp_y + CARD_HEIGHT/2):
+        if (x > dp_x - self.card_width/2 and x < dp_x + self.card_width/2 and
+            y > dp_y - self.card_height/2 and y < dp_y + self.card_height/2):
             
             if self.is_discarding:
                 self.send_discard_cards()
@@ -490,12 +552,12 @@ class VirusClient(arcade.Window):
                 self.selected_card_index = None
                 self.selected_card_data = None
                 self.selected_card_indices = []
-                self.status_text = "MODO DESCARTE: Selecciona hasta 3 cartas. Clic en el mazo de descarte para confirmar."
+                self.status_text = "DESCARTE: Elige hasta 3 cartas. Clic aquí para confirmar."
             return
 
         cards_clicked = arcade.get_sprites_at_point((x, y), self.player_hand_sprites)
         if cards_clicked:
-            clicked_card_sprite = cards_clicked[0]
+            clicked_card_sprite = cards_clicked[0] 
             idx = clicked_card_sprite.index
             
             if self.is_discarding:
@@ -505,7 +567,7 @@ class VirusClient(arcade.Window):
                     if len(self.selected_card_indices) < 3:
                         self.selected_card_indices.append(idx)
                     else:
-                        self.status_text = "Límite de 3 cartas para descarte."
+                        self.status_text = "Límite de 3 cartas."
                 return
             else:
                 if self.selected_card_data and self.selected_card_index == idx:
@@ -516,52 +578,42 @@ class VirusClient(arcade.Window):
                     self.selected_card_index = idx
                     self.selected_card_data = clicked_card_sprite.data
                     self.transplant_source_color = None 
-                    if self.selected_card_data['name'] == 'transplant':
-                        self.status_text = f"Trasplante: Elige tu órgano de origen."
+                    
+                    c_name = self.selected_card_data['name']
+                    if c_name == 'transplant':
+                        self.status_text = f"Trasplante: Elige TU órgano, luego el SUYO."
                     else:
-                        self.status_text = f"Carta {self.selected_card_data['name']} seleccionada. Elige un objetivo."
+                        self.status_text = f"Seleccionado: {c_name}. Elige objetivo."
                 return
 
         if self.selected_card_data and not self.is_discarding:
-            my_board_click = self.get_board_click(x, y, MY_BOARD_SLOTS, self.my_pid)
-            opp_board_click = None
-            opp_pid, _ = self.get_opponent_pid_and_board()
-            if opp_pid:
-                opp_board_click = self.get_board_click(x, y, OPPONENT_BOARD_SLOTS, opp_pid)
+            clicked_slot = self.get_dynamic_board_click(x, y)
+            
+            if clicked_slot:
+                if self.selected_card_data['name'] == 'transplant':
+                    self.handle_transplant_click_dynamic(clicked_slot)
+                else:
+                    self.handle_normal_click_dynamic(clicked_slot)
 
-            click_target = my_board_click or opp_board_click
-
-            if self.selected_card_data['name'] == 'transplant':
-                self.handle_transplant_click(my_board_click, opp_board_click)
-            else:
-                self.handle_normal_click(click_target)
-
-    def handle_transplant_click(self, my_board_click, opp_board_click):
+    def handle_transplant_click_dynamic(self, clicked_slot):
         if self.transplant_source_color is None:
-            if my_board_click:
-                self.transplant_source_color = my_board_click['color']
-                self.status_text = f"Origen '{self.transplant_source_color}' OK. Ahora elige el órgano del OPONENTE."
+            if clicked_slot['pid'] == self.my_pid:
+                self.transplant_source_color = clicked_slot['color']
+                self.status_text = f"Origen '{self.transplant_source_color}'. Ahora elige RIVAL."
             else:
-                self.status_text = "Inválido. Debes elegir TU PROPIO órgano primero."
+                self.status_text = "Trasplante: Primero TU órgano."
         else:
-            if opp_board_click:
-                target_pid = opp_board_click['pid']
-                target_color = opp_board_click['color']
+            if clicked_slot['pid'] != self.my_pid:
                 self.send_play_card(
-                    target_pid, 
-                    target_color, 
+                    clicked_slot['pid'], 
+                    clicked_slot['color'], 
                     player_color=self.transplant_source_color
                 )
             else:
-                self.status_text = "Inválido. Debes elegir el órgano del OPONENTE."
+                self.status_text = "Trasplante: El segundo clic debe ser un RIVAL."
 
-    def handle_normal_click(self, click_target):
-        if click_target:
-            target_pid = click_target['pid']
-            target_color = click_target['color']
-            self.send_play_card(target_pid, target_color)
-        else:
-            self.status_text = "Clic en un slot de órgano válido (tuyo o del oponente)."
+    def handle_normal_click_dynamic(self, clicked_slot):
+        self.send_play_card(clicked_slot['pid'], clicked_slot['color'])
 
     def send_play_card(self, target_pid, target_color, player_color=None):
         card = self.selected_card_data
@@ -585,7 +637,7 @@ class VirusClient(arcade.Window):
 
     def send_discard_cards(self):
         if not self.selected_card_indices:
-            self.status_text = "No hay cartas seleccionadas para descartar."
+            self.status_text = "Selecciona cartas para descartar."
             return
         cards_to_discard = []
         my_hand = self.get_my_hand() 
@@ -593,7 +645,7 @@ class VirusClient(arcade.Window):
             try:
                 cards_to_discard.append(my_hand[i]) 
             except IndexError:
-                print(f"Error: Índice de descarte {i} fuera de rango para mano de tamaño {len(my_hand)}")
+                pass
         msg = {
             "action": "discard_cards",
             "cards": cards_to_discard
@@ -604,10 +656,18 @@ class VirusClient(arcade.Window):
         self.is_discarding = False
 
 def main():
-    server_ip = input("IP del servidor Erlang (ej. 127.0.0.1): ").strip()
+    print("=== CLIENTE VIRUS 6 JUGADORES ===")
+    server_ip = input("IP del servidor (Enter para 127.0.0.1): ").strip()
     if not server_ip:
         server_ip = "127.0.0.1"
-    game = VirusClient(server_ip)
+    
+    nickname = input("Tu Nickname: ").strip()
+    if not nickname:
+        nickname = "Jugador"
+    
+    game = VirusClient(nickname)
+    game.server_ip = server_ip
+    game.connect_and_join()
     arcade.run()
 
 if __name__ == "__main__":

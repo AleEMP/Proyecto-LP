@@ -18,10 +18,7 @@
 
 -include("virus_defs.hrl").
 
-%% ----------------------------------------------------
-%% Creación y Barajado del Mazo
-%% ----------------------------------------------------
-
+%% ... (CREACIÓN DE MAZO Y BARAJADO IGUAL) ...
 create_organ_deck() ->
     [
         #card{type=?T_ORGAN, color=?RED,    name=?N_HEART,      quantity=5},
@@ -58,20 +55,14 @@ create_treatment_deck() ->
         #card{type=?T_TREATMENT, color=?NONE, name=?N_MEDICAL_MISTAKE, quantity=1}
     ].
 
-create_card_list([]) ->
-    [];
+create_card_list([]) -> [];
 create_card_list([#card{quantity=N}=Card | Rest]) ->
     ActualCard = Card#card{quantity=undefined},
     List = [ActualCard || _ <- lists:seq(1, N)],
     List ++ create_card_list(Rest).
 
 create_full_deck() ->
-    AllCardDefinitions = 
-        create_organ_deck() ++ 
-        create_virus_deck() ++ 
-        create_medicine_deck() ++ 
-        create_treatment_deck(),
-
+    AllCardDefinitions = create_organ_deck() ++ create_virus_deck() ++ create_medicine_deck() ++ create_treatment_deck(),
     create_card_list(AllCardDefinitions).
 
 create_and_shuffle_deck() ->
@@ -106,42 +97,33 @@ print_deck([Card | Rest], Counter) ->
 
 draw_cards(N, Deck, DiscardPile) ->
     case N of
-        0 -> 
-            {Deck, [], DiscardPile};
+        0 -> {Deck, [], DiscardPile};
         _ ->
             case Deck of
                 [] ->
-                    io:format("  -> [MODEL] Mazo vacío. Rebarajando ~w cartas del descarte para robar ~w.~n", 
-                              [length(DiscardPile), N]),
+                    io:format("  -> [MODEL] Mazo vacío. Rebarajando ~w cartas del descarte para robar ~w.~n", [length(DiscardPile), N]),
                     ShuffledDeck = shuffle_deck(DiscardPile),
                     draw_cards(N, ShuffledDeck, []);
-                
                 [Card | RemainingDeck] ->
-                    {FinalDeck, DrawnCardsTail, FinalDiscardPile} = 
-                        draw_cards(N - 1, RemainingDeck, DiscardPile),
-                    
+                    {FinalDeck, DrawnCardsTail, FinalDiscardPile} = draw_cards(N - 1, RemainingDeck, DiscardPile),
                     {FinalDeck, [Card | DrawnCardsTail], FinalDiscardPile}
             end
     end.
 
 is_valid_target(Card, TargetColor, CurrentBoard) ->
-    is_valid_target_color(Card, TargetColor) andalso
-    is_valid_target_state(Card, TargetColor, CurrentBoard).
+    is_valid_target_color(Card, TargetColor) andalso is_valid_target_state(Card, TargetColor, CurrentBoard).
 
 is_valid_target_color(Card, TargetColor) ->
     CardColor = Card#card.color,
     case Card#card.type of
-        ?T_ORGAN -> 
-            (CardColor == TargetColor);
-        _ ->
-            (CardColor == TargetColor) orelse (CardColor == ?WILD) orelse (TargetColor == ?WILD)
+        ?T_ORGAN -> (CardColor == TargetColor);
+        _ -> (CardColor == TargetColor) orelse (CardColor == ?WILD) orelse (TargetColor == ?WILD)
     end.
 
 is_valid_target_state(Card, TargetColor, CurrentBoard) ->
     CurrentSlot = maps:get(TargetColor, CurrentBoard), 
     CurrentState = CurrentSlot#organ_slot.state, 
     CardType = Card#card.type,
-    
     case CardType of
         ?T_ORGAN -> CurrentState == 0;
         ?T_MEDICINE -> CurrentState /= 3 andalso CurrentState /= 0;
@@ -153,12 +135,10 @@ is_valid_target_state(Card, TargetColor, CurrentBoard) ->
 apply_card_to_board(Card, TargetColor, CurrentBoard) ->
     case is_valid_target(Card, TargetColor, CurrentBoard) of
         false ->
-            io:format("    -> [MODEL] ERROR: Jugada inválida por color o estado (~w sobre ~p).~n", 
-                      [Card#card.type, TargetColor]),
+            io:format("    -> [MODEL] ERROR: Jugada inválida por color o estado (~w sobre ~p).~n", [Card#card.type, TargetColor]),
             {error, invalid_play}; 
         true ->
             CurrentSlot = maps:get(TargetColor, CurrentBoard), 
-            
             {NewSlot, CardsRemovedFromSlot} = 
                 case Card#card.type of
                     ?T_ORGAN    -> apply_organ(Card, CurrentSlot);
@@ -167,11 +147,9 @@ apply_card_to_board(Card, TargetColor, CurrentBoard) ->
                     ?T_TREATMENT -> {CurrentSlot, []};
                     _ -> {CurrentSlot, []}
                 end,
-
             io:format("     -> [MODEL] Órgano ~w: Estado ~w -> ~w. Descarte: ~w cartas.~n", 
             [TargetColor, CurrentSlot#organ_slot.state, NewSlot#organ_slot.state, length(CardsRemovedFromSlot)]),
             NewBoard = maps:put(TargetColor, NewSlot, CurrentBoard),
-            
             {ok, TargetColor, NewBoard, CardsRemovedFromSlot} 
     end.
 
@@ -189,8 +167,7 @@ apply_medicine(Card, Slot) ->
     case Slot#organ_slot.state of
         -1 -> 
             {VirusToRemove, RemainingCards} = remove_card_by_type(?T_VIRUS, Cards),
-            CardsToRemove = 
-                case VirusToRemove of
+            CardsToRemove = case VirusToRemove of
                     undefined -> [Card];     
                     V -> [Card, V]        
                 end,
@@ -219,8 +196,7 @@ apply_virus(Card, Slot) ->
             {NewSlot, [Card | Cards]}; 
         2 -> 
             {MedicineToRemove, RemainingCards} = remove_card_by_type(?T_MEDICINE, Cards),
-            CardsToRemove = 
-                case MedicineToRemove of
+            CardsToRemove = case MedicineToRemove of
                     undefined -> [Card];      
                     M -> [Card, M]          
                 end,
@@ -229,8 +205,7 @@ apply_virus(Card, Slot) ->
         _ -> {Slot, []}
     end.
     
-remove_card_by_type(_Type, []) ->
-    {undefined, []};
+remove_card_by_type(_Type, []) -> {undefined, []};
 remove_card_by_type(Type, [H | T]) ->
     case H#card.type of
         Type -> {H, T};
@@ -241,37 +216,24 @@ remove_card_by_type(Type, [H | T]) ->
 
 next_player(CurrentPlayerPID, PlayerPIDs) ->
     {Front, [CurrentPlayerPID | Rest]} = lists:splitwith(
-        fun(PID) -> PID =/= CurrentPlayerPID end, 
-        PlayerPIDs
-    ),
+        fun(PID) -> PID =/= CurrentPlayerPID end, PlayerPIDs),
     case Rest of
         [NextPID | _] -> NextPID;
         [] -> hd(Front)
     end.
 
-check_win_condition(PlayerBoards) when is_map(PlayerBoards) ->
-    check_win_condition(maps:to_list(PlayerBoards));
-check_win_condition([]) ->
-    no_winner;
+check_win_condition(PlayerBoards) when is_map(PlayerBoards) -> check_win_condition(maps:to_list(PlayerBoards));
+check_win_condition([]) -> no_winner;
 check_win_condition([ {PID, Board} | Rest ]) ->
     HealthyOrgans = maps:fold(
         fun(_Color, Slot, Acc) ->
             case Slot#organ_slot.state of
-                1 -> Acc + 1;
-                2 -> Acc + 1;
-                3 -> Acc + 1;
-                _ -> Acc
+                1 -> Acc + 1; 2 -> Acc + 1; 3 -> Acc + 1; _ -> Acc
             end
-        end,
-        0, Board),
+        end, 0, Board),
+    if HealthyOrgans >= 4 -> {won, PID}; true -> check_win_condition(Rest) end.
 
-    if
-        HealthyOrgans >= 4 -> {won, PID};
-        true -> check_win_condition(Rest)
-    end.
-
-take_exact_cards([], PlayerHand, Acc) -> 
-    {Acc, PlayerHand};
+take_exact_cards([], PlayerHand, Acc) -> {Acc, PlayerHand};
 take_exact_cards([CardToDiscard | RestCards], PlayerHand, Acc) ->
     case lists:member(CardToDiscard, PlayerHand) of
         true ->
@@ -282,25 +244,20 @@ take_exact_cards([CardToDiscard | RestCards], PlayerHand, Acc) ->
     end.
 
 %% ----------------------------------------------------
-%% LÓGICA DE CONTAGIO MEJORADA
+%% LÓGICA DE CONTAGIO MEJORADA (Inteligente)
 %% ----------------------------------------------------
 
-%% Verifica si hay ALGÚN movimiento posible (teniendo en cuenta virus Wild)
 can_contagion_happen(PlayerPID, PlayerBoards) ->
     MyBoard = maps:get(PlayerPID, PlayerBoards),
     
     %% Recorremos mis slots buscando virus
     maps:fold(fun(SourceColor, MySlot, AnyMoveFound) ->
-        if AnyMoveFound -> true; %% Si ya encontramos uno, parar (optimización)
+        if AnyMoveFound -> true;
            MySlot#organ_slot.state == -1 -> 
-               %% Tengo un virus aquí. ¿Es Wild?
                {VirusCard, _} = remove_card_by_type(?T_VIRUS, MySlot#organ_slot.cards),
                IsWildVirus = (VirusCard#card.color == ?WILD),
-
-               %% Buscar víctimas en tableros oponentes
                check_opponents_for_target(PlayerPID, PlayerBoards, SourceColor, IsWildVirus);
-           true -> 
-               false
+           true -> false
         end
     end, false, MyBoard).
 
@@ -309,22 +266,17 @@ check_opponents_for_target(PlayerPID, PlayerBoards, SourceColor, IsWildVirus) ->
         if AccFound -> true;
            OpponentPID == PlayerPID -> false;
            true ->
-                %% Si es Wild, revisamos TODOS los slots del oponente.
-                %% Si es Normal, solo revisamos el slot del MISMO color.
                 TargetColorsToCheck = case IsWildVirus of
                     true -> maps:keys(OppBoard);
                     false -> [SourceColor]
                 end,
-                
                 lists:any(fun(TColor) ->
                     Slot = maps:get(TColor, OppBoard, #organ_slot{}),
-                    %% Es válido si el órgano está SANO (Estado 1)
                     Slot#organ_slot.state == 1
                 end, TargetColorsToCheck)
         end
     end, false, PlayerBoards).
 
-%% Mueve el virus de SourceColor (Mío) a TargetColor (Suyo)
 move_virus_card(PlayerPID, TargetPID, SourceColor, TargetColor, PlayerBoards) ->
     PlayerBoard = maps:get(PlayerPID, PlayerBoards),
     TargetBoard = maps:get(TargetPID, PlayerBoards),
@@ -332,25 +284,18 @@ move_virus_card(PlayerPID, TargetPID, SourceColor, TargetColor, PlayerBoards) ->
     MySlot = maps:get(SourceColor, PlayerBoard),
     TargetSlot = maps:get(TargetColor, TargetBoard),
     
-    %% 1. Validar estados básicos (Mío: Infectado(-1), Suyo: Sano(1))
     StatesOK = (MySlot#organ_slot.state == -1) andalso (TargetSlot#organ_slot.state == 1),
     
     if not StatesOK -> {error, invalid_slot_state};
     true ->
         {VirusCard, RemainingCards} = remove_card_by_type(?T_VIRUS, MySlot#organ_slot.cards),
         
-        %% 2. Validar compatibilidad de color
-        %% Se permite si: Colores iguales O el virus es Wild O el objetivo es Wild
         ColorsMatch = (SourceColor == TargetColor),
         IsWildVirus = (VirusCard#card.color == ?WILD),
         IsWildTarget = (TargetColor == ?WILD), 
         
         if (ColorsMatch orelse IsWildVirus orelse IsWildTarget) ->
-             %% EJECUTAR MOVIMIENTO
-             %% Mi slot vuelve a estado 1 (Órgano sano/tocado)
              NewMySlot = MySlot#organ_slot{state = 1, cards = RemainingCards},
-             
-             %% Su slot pasa a estado -1 (Infectado)
              NewTargetCards = [VirusCard | TargetSlot#organ_slot.cards],
              NewTargetSlot = TargetSlot#organ_slot{state = -1, cards = NewTargetCards},
              
@@ -360,7 +305,6 @@ move_virus_card(PlayerPID, TargetPID, SourceColor, TargetColor, PlayerBoards) ->
              FinalBoards = maps:put(PlayerPID, NewPlayerBoard, 
                            maps:put(TargetPID, NewTargetBoard, PlayerBoards)),
              {ok, FinalBoards};
-             
         true ->
              {error, color_mismatch}
         end
