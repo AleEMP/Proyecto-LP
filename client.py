@@ -108,6 +108,7 @@ class VirusClient(arcade.Window):
     def __init__(self, server_ip):
         super().__init__(SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_TITLE)
         arcade.set_background_color(arcade.color.DARK_BLUE_GRAY)
+        #arcade.set_background_color(arcade.color.BARBIE_PINK)
 
         self.network = NetworkClient(server_ip)
         self.network.on_message = self._process_server_message
@@ -125,6 +126,8 @@ class VirusClient(arcade.Window):
         self.selected_card_index = None
 
         self.is_discarding = False
+        self.contagion_mode = False
+        self.contagion_source_color = None
         self.transplant_source_color = None
 
         self.card_textures = {}
@@ -213,6 +216,8 @@ class VirusClient(arcade.Window):
                 data = json.loads(message)
                 action = data.get("action")
                 
+                print(f"Action: {action}, Data completa: {data}")
+                
                 if action == "welcome":
                     self.my_pid = data.get("my_pid")
                     self.status_text = f"Conectado! Soy {self.my_pid}"
@@ -224,14 +229,37 @@ class VirusClient(arcade.Window):
                     self.transplant_source_color = None
 
                 elif action == "play_ok":
+                    #arcade.set_background_color(arcade.color.FALU_RED)
+                    print(f"Play_ok data: {data}")
                     self.status_text = "Jugada aceptada."
                     pass
+
+                elif action == "contagion_start":
+                    arcade.set_background_color(arcade.color.SEA_GREEN)
+                    self.contagion_mode = True
+                    self.contagion_source_color = None
+                    self.status_text = "Modo Contagio activo. Elige órgano de origen."
+                
+                elif action == "contagion_end":
+                    arcade.set_background_color(arcade.color.DARK_BLUE_GRAY)
+                    self.contagion_mode = False
+                    self.contagion_source_color = None
+                    self.status_text = "Modo Contagio terminado."
+
+                elif action == "contagion_ok":
+                    self.status_text = "¡Contagio exitoso! Puedes seguir contagiando."
+
+                elif action == "contagion_error":
+                    self.status_text = f"Error en contagio: {data.get('reason')}"
+                    self.contagion_source_color = None
+                    self.selected_card_index = None
+                    self.selected_card_data = None
 
                 elif action == "update_state":
                     self.game_state = data.get("state")
                     self.status_text = "Estado actualizado."
                     self.is_my_turn = (self.game_state.get("current_player") == self.my_pid)
-                    self.update_hand_sprites() # <--- Esto recargará la mano
+                    self.update_hand_sprites()
 
                     game_stage = self.game_state.get("game_stage")
                     if game_stage and game_stage != "waiting_for_players":
@@ -389,7 +417,6 @@ class VirusClient(arcade.Window):
 
 
     def get_board_click(self, x, y, slot_map, owner_pid):
-        # ... (sin cambios)
         for color, (cx, cy) in slot_map.items():
             if (x > cx - CARD_WIDTH/2 and x < cx + CARD_WIDTH/2 and
                 y > cy - CARD_HEIGHT/2 and y < cy + CARD_HEIGHT/2):
@@ -397,82 +424,114 @@ class VirusClient(arcade.Window):
         return None
 
     def on_mouse_press(self, x, y, button, modifiers):
+        if self.contagion_mode:
+            self.status_text = "Modo Contagio activo."
+            self.handle_contagion_mode_click(x, y)
+            return
+        else:
 
-        if button == arcade.MOUSE_BUTTON_RIGHT and self.is_discarding:
-            self.is_discarding = False
-            self.selected_card_indices = []
-            self.status_text = "Modo descarte cancelado."
-            return
-       
-        clicked_buttons = arcade.get_sprites_at_point((x, y), self.start_button_list)
-        if clicked_buttons:
-            print("Enviando START GAME...")
-            self.network.send(json.dumps({"action": "start_game"}))
-            return
-
-        if not self.is_my_turn:
-            self.status_text = "No es tu turno."
-            return
-            
-        dp_x, dp_y = DISCARD_PILE_SLOT
-        if (x > dp_x - CARD_WIDTH/2 and x < dp_x + CARD_WIDTH/2 and
-            y > dp_y - CARD_HEIGHT/2 and y < dp_y + CARD_HEIGHT/2):
-            
-            if self.is_discarding:
-                self.send_discard_cards()
-            else:
-                self.is_discarding = True
-                self.selected_card_index = None
-                self.selected_card_data = None
+            if button == arcade.MOUSE_BUTTON_RIGHT and self.is_discarding:
+                self.is_discarding = False
                 self.selected_card_indices = []
-                self.status_text = "MODO DESCARTE: Selecciona hasta 3 cartas. Clic en el mazo de descarte para confirmar."
-            return
+                self.status_text = "Modo descarte cancelado."
+                return
+        
+            clicked_buttons = arcade.get_sprites_at_point((x, y), self.start_button_list)
+            if clicked_buttons:
+                print("Enviando START GAME...")
+                self.network.send(json.dumps({"action": "start_game"}))
+                return
 
-        cards_clicked = arcade.get_sprites_at_point((x, y), self.player_hand_sprites)
-        if cards_clicked:
-            clicked_card_sprite = cards_clicked[0]
-            idx = clicked_card_sprite.index
-            
-            if self.is_discarding:
-                if idx in self.selected_card_indices:
-                    self.selected_card_indices.remove(idx)
-                else:
-                    if len(self.selected_card_indices) < 3:
-                        self.selected_card_indices.append(idx)
-                    else:
-                        self.status_text = "Límite de 3 cartas para descarte."
+            if not self.is_my_turn:
+                self.status_text = "No es tu turno."
                 return
                 
-            else:
-                if self.selected_card_data and self.selected_card_index == idx:
+            dp_x, dp_y = DISCARD_PILE_SLOT
+            if (x > dp_x - CARD_WIDTH/2 and x < dp_x + CARD_WIDTH/2 and
+                y > dp_y - CARD_HEIGHT/2 and y < dp_y + CARD_HEIGHT/2):
+                
+                if self.is_discarding:
+                    self.send_discard_cards()
+                else:
+                    self.is_discarding = True
                     self.selected_card_index = None
                     self.selected_card_data = None
-                    self.status_text = "Selección cancelada."
-                else:
-                    self.selected_card_index = idx
-                    self.selected_card_data = clicked_card_sprite.data
-                    self.transplant_source_color = None 
-                    if self.selected_card_data['name'] == 'transplant':
-                        self.status_text = f"Trasplante: Elige tu órgano de origen."
-                    else:
-                        self.status_text = f"Carta {self.selected_card_data['name']} seleccionada. Elige un objetivo."
+                    self.selected_card_indices = []
+                    self.status_text = "MODO DESCARTE: Selecciona hasta 3 cartas. Clic en el mazo de descarte para confirmar."
                 return
 
-        if self.selected_card_data and not self.is_discarding:
-            my_board_click = self.get_board_click(x, y, MY_BOARD_SLOTS, self.my_pid)
-            
-            opp_board_click = None
-            opp_pid, _ = self.get_opponent_pid_and_board()
-            if opp_pid:
-                opp_board_click = self.get_board_click(x, y, OPPONENT_BOARD_SLOTS, opp_pid)
+            cards_clicked = arcade.get_sprites_at_point((x, y), self.player_hand_sprites)
+            if cards_clicked:
+                clicked_card_sprite = cards_clicked[0]
+                idx = clicked_card_sprite.index
+                
+                if self.is_discarding:
+                    if idx in self.selected_card_indices:
+                        self.selected_card_indices.remove(idx)
+                    else:
+                        if len(self.selected_card_indices) < 3:
+                            self.selected_card_indices.append(idx)
+                        else:
+                            self.status_text = "Límite de 3 cartas para descarte."
+                    return
+                    
+                else:
+                    if self.selected_card_data and self.selected_card_index == idx:
+                        self.selected_card_index = None
+                        self.selected_card_data = None
+                        self.status_text = "Selección cancelada."
+                    else:
+                        self.selected_card_index = idx
+                        self.selected_card_data = clicked_card_sprite.data
+                        self.transplant_source_color = None 
+                        if self.selected_card_data['name'] == 'transplant':
+                            self.status_text = f"Trasplante: Elige tu órgano de origen."
+                        else:
+                            self.status_text = f"Carta {self.selected_card_data['name']} seleccionada. Elige un objetivo."
+                    return
 
-            click_target = my_board_click or opp_board_click
+            if self.selected_card_data and not self.is_discarding:
+                my_board_click = self.get_board_click(x, y, MY_BOARD_SLOTS, self.my_pid)
+                
+                opp_board_click = None
+                opp_pid, _ = self.get_opponent_pid_and_board()
+                if opp_pid:
+                    opp_board_click = self.get_board_click(x, y, OPPONENT_BOARD_SLOTS, opp_pid)
 
-            if self.selected_card_data['name'] == 'transplant':
-                self.handle_transplant_click(my_board_click, opp_board_click)
+                click_target = my_board_click or opp_board_click
+
+                if self.selected_card_data['name'] == 'transplant':
+                    self.handle_transplant_click(my_board_click, opp_board_click)
+                else:
+                    self.handle_normal_click(click_target)
+
+    def handle_contagion_mode_click(self, x, y):
+        cards_clicked = arcade.get_sprites_at_point((x, y), self.player_hand_sprites)
+        if cards_clicked:
+            self.status_text = "En modo contagio: selecciona órganos del tablero"
+            return
+        
+        my_board_click = self.get_board_click(x, y, MY_BOARD_SLOTS, self.my_pid)
+        opp_pid, _ = self.get_opponent_pid_and_board()
+        opp_board_click = self.get_board_click(x, y, OPPONENT_BOARD_SLOTS, opp_pid) if opp_pid else None
+        
+        if self.contagion_source_color is None:
+            if my_board_click:
+                self.contagion_source_color = my_board_click['color']
+                self.status_text = f"Origen '{self.contagion_source_color}' OK. Ahora elige objetivo del OPONENTE."
             else:
-                self.handle_normal_click(click_target)
-
+                self.status_text = "Inválido. Debes elegir TU PROPIO órgano infectado primero."
+        else:
+            if opp_board_click:
+                target_pid = opp_board_click['pid']
+                target_color = opp_board_click['color']
+                self.send_play_contagion(
+                    target_pid,
+                    self.contagion_source_color, 
+                    target_color
+                )
+            else:
+                self.status_text = "Inválido. Debes elegir el órgano del OPONENTE."
 
     def handle_transplant_click(self, my_board_click, opp_board_click):
         if self.transplant_source_color is None:
@@ -522,6 +581,18 @@ class VirusClient(arcade.Window):
         self.selected_card_index = None
         self.selected_card_data = None
         self.transplant_source_color = None
+
+    def send_play_contagion(self, target_pid, player_color, target_color):
+        msg = {
+            "action": "play_contagion",
+            "target_pid": target_pid,
+            "player_color": player_color,
+            "target_color": target_color
+        }
+        self.network.send(json.dumps(msg))
+        
+        #self.contagion_mode = False
+        self.contagion_source_color = None
 
     def send_discard_cards(self):
         

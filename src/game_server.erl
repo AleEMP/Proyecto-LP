@@ -91,7 +91,9 @@ client_loop(Socket) ->
 handle_json_from_client(Data, Socket) ->
     MyPID = self(), 
     io:format("~p: [BRIDGE] Recibido JSON crudo: ~p~n", [MyPID, Data]),
+
     try jsx:decode(Data, [return_maps]) of
+
         #{<<"action">> := <<"start_game">>} ->
             io:format("~p: [BRIDGE] JSON Decodificado: START_GAME. Llamando a la lógica...~n", [MyPID]),
             Result = game_manager:start_game(),
@@ -101,6 +103,8 @@ handle_json_from_client(Data, Socket) ->
                 {error, Reason} ->
                     send_json(Socket, #{action => <<"start_error">>, reason => Reason})
             end;
+
+
         #{<<"action">> := <<"discard_cards">>,
           <<"cards">> := CardMapsList 
          } ->
@@ -124,6 +128,8 @@ handle_json_from_client(Data, Socket) ->
                 {ok, _} -> send_json(Socket, #{action => <<"discard_ok">>});
                 {error, Reason} -> send_json(Socket, #{action => <<"discard_error">>, reason => Reason})
             end;
+
+
         #{<<"action">> := <<"play_card">>,
           <<"target_pid">> := TargetPIDBin, 
           <<"card">> := CardMap,             
@@ -147,13 +153,43 @@ handle_json_from_client(Data, Socket) ->
 
             Result = game_manager:play_card(MyPID, TargetPID, Card, PlayerColor, TargetColor),
             
+            io:format("~p: [DEBUG] Result de play_card: ~p~n", [MyPID, Result]),
+            
             case Result of
-                {ok, _} -> send_json(Socket, #{action => <<"play_ok">>});
-                {error, Reason} -> send_json(Socket, #{action => <<"play_error">>, reason => Reason})
+                {ok, contagion_phase} ->
+                    io:format("~p: [DEBUG] Entrando en caso contagion_phase~n", [MyPID]),
+                    MyPID ! {send_json_payload, #{action => <<"contagion_start">>}};
+                {ok, SomethingElse} ->
+                    io:format("~p: [DEBUG] Entrando en caso {ok, ~p}~n", [MyPID,SomethingElse]),
+                    MyPID ! {send_json_payload, #{action => <<"play_ok">>}};
+                {error, Reason} ->
+                    io:format("~p: [DEBUG] Entrando en caso error: ~p~n", [MyPID, Reason]),
+                    MyPID ! {send_json_payload, #{action => <<"play_error">>}}
+            end;    
+
+        #{<<"action">> := <<"play_contagion">>,
+        <<"target_pid">> := TargetPIDBin, 
+        <<"player_color">> := PlayerColorBin, 
+        <<"target_color">> := TargetColorBin  
+        } ->
+            
+            TargetPID = list_to_pid(binary_to_list(TargetPIDBin)),
+            PlayerColor = binary_to_atom(PlayerColorBin, utf8),
+            TargetColor = binary_to_atom(TargetColorBin, utf8),
+
+            Result = game_manager:start_contagion(MyPID, TargetPID, PlayerColor, TargetColor),
+            
+            case Result of
+                {ok, contagion_executed} -> 
+                    MyPID ! {send_json_payload, #{action => <<"contagion_ok">>}};
+                {error, no_contagion_possible} -> 
+                    MyPID ! {send_json_payload, #{action => <<"contagion_end">>}};
+                {error, _} -> 
+                    MyPID ! {send_json_payload, #{action => <<"contagion_error">>}}
             end;
 
-        Other ->
-            io:format("~p: JSON no reconocido: ~p~n", [MyPID, Other])
+            Other ->
+                io:format("~p: JSON no reconocido: ~p~n", [MyPID, Other])
 
     catch
         _:Error ->

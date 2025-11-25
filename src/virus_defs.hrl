@@ -57,3 +57,10 @@
 -define(MIN_PLAYERS, 2).
 -define(MAX_PLAYERS, 6).
 -define(ORGAN_COLORS, [?RED, ?GREEN, ?BLUE, ?YELLOW, ?WILD]).
+-define(COLOR_MAP, #{
+    ?RED => 0, 
+    ?GREEN => 0, 
+    ?BLUE => 0, 
+    ?YELLOW => 0, 
+    ?WILD => 0
+}).

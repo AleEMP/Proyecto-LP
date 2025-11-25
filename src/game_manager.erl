@@ -5,6 +5,7 @@
     start_link/0,
     add_player/1,
     play_card/5,
+    start_contagion/4,
     discard_cards/2,
     start_game/0
 ]).
@@ -44,6 +45,9 @@ add_player(PlayerPID) ->
 
 play_card(PlayerPID, TargetPID, Card, PlayerColor, TargetColor) ->
     gen_server:call(game_manager, {play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}).
+
+start_contagion(PlayerPID, TargetPID, PlayerColor, TargetColor) ->
+    gen_server:call(game_manager, {start_contagion, PlayerPID, TargetPID, PlayerColor, TargetColor}).
 
 start_game() -> 
     gen_server:call(game_manager, start_game).
@@ -156,8 +160,12 @@ apply_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State) ->
             FinalCardsToDiscard = [Card | CardsToDiscardFromLogic],
             
             if 
-                IsSuccessful -> {NewState, {ok, played, FinalCardsToDiscard}}; 
-                true -> {State, {error, invalid_treatment_target}} 
+                IsSuccessful andalso Card#card.name == ?N_CONTAGION ->
+                    {NewState, {ok, contagion_played, FinalCardsToDiscard}};
+                IsSuccessful ->
+                    {NewState, {ok, played, FinalCardsToDiscard}}; 
+                true ->
+                    {State, {error, invalid_treatment_target}} 
             end;
 
         _ -> 
@@ -198,14 +206,12 @@ apply_treatment_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State
                 {NState, IsS, []};
                 
            ?N_CONTAGION ->
-
-                {NState, IsS} = logic_contagion(PlayerPID, TargetPID, PlayerColor, TargetColor, State),
-                {NState, IsS, []}; 
+                {State, true, []}; 
                 
             ?N_LATEX_GLOVE ->
 
-                {StateAfterGlove, DiscardedHands} = logic_latex_glove(PlayerPID, State),
-                {StateAfterGlove, true, DiscardedHands};
+                {StateAfterGlove, IsS, DiscardedHands} = logic_latex_glove(PlayerPID, State),
+                {StateAfterGlove, IsS, DiscardedHands};
                 
             ?N_MEDICAL_MISTAKE ->
                 
@@ -304,7 +310,7 @@ logic_latex_glove(PlayerPID, State) ->
         player_hands = NewHands
     },
 
-    {NewState, DiscardedCardsList}.
+    {NewState, true, DiscardedCardsList}.
 
 
 logic_medical_error(PlayerPID, TargetPID, State) ->
@@ -321,36 +327,108 @@ logic_medical_error(PlayerPID, TargetPID, State) ->
     {NewState, true}.
 
 logic_contagion(PlayerPID, TargetPID, PlayerColor, TargetColor, State) ->
-    Boards = State#state.player_boards,
-    PlayerBoard = maps:get(PlayerPID, Boards),
-    TargetBoard = maps:get(TargetPID, Boards),
+    PlayerBoards = State#state.player_boards,
+
+    PlayerBoard = maps:get(PlayerPID, PlayerBoards),
+    PlayerSlot = maps:get(PlayerColor, PlayerBoard),
+
+    TargetBoard = maps:get(TargetPID, PlayerBoards),
+    TargetSlot = maps:get(TargetColor, TargetBoard),
+
+    VirusCard = case lists:filter(fun(Card) -> 
+            Card#card.type == ?T_VIRUS 
+        end, PlayerSlot#organ_slot.cards) of
+        [VCard | _] -> VCard;
+        [] -> undefined
+    end,
     
-    PSlot = maps:get(PlayerColor, PlayerBoard), 
-    TSlot = maps:get(TargetColor, TargetBoard), 
+    case VirusCard of
+        undefined ->
+            {State, {error, no_virus_found}};
+        _ when PlayerSlot#organ_slot.state /= -1 ->
+            {State, {error, source_not_infected}};
+        _ when TargetSlot#organ_slot.state /= 1 -> 
+            {State, {error, target_not_healthy}};
+        _ ->
+            case game_model:apply_card_to_board(VirusCard, TargetColor, TargetBoard) of
+                {ok, _ValidColor, NewTargetBoard, CardsToDiscardFromBoard} ->
 
-    HasVirus = PSlot#organ_slot.state == -1,
-    
-    CanReceive = TSlot#organ_slot.state /= 0 andalso TSlot#organ_slot.state /= 3,
+                    NewPlayerSlot = PlayerSlot#organ_slot{
+                        state = 1,
+                        cards = lists:delete(VirusCard, PlayerSlot#organ_slot.cards)
+                    },
 
-    if
-        HasVirus andalso CanReceive ->
-           
-            {VirusCard, PSlot_Cards} = game_model:remove_card_by_type(?T_VIRUS, PSlot#organ_slot.cards),
-            New_PSlot = PSlot#organ_slot{state = 1, cards = PSlot_Cards}, 
-
-            {New_TSlot, _Discard} = game_model:apply_virus(VirusCard, TSlot),
-
-            NewPlayerBoard = maps:put(PlayerColor, New_PSlot, PlayerBoard),
-            NewTargetBoard = maps:put(TargetColor, New_TSlot, TargetBoard),
-            
-            NewBoards = maps:put(PlayerPID, NewPlayerBoard, 
-                                 maps:put(TargetPID, NewTargetBoard, Boards)),
-            
-            {State#state{player_boards = NewBoards}, true};
-            
-        true ->
-            {State, false}
+                    NewPlayerBoard = maps:put(PlayerColor, NewPlayerSlot, PlayerBoard),
+                    
+                    NewPlayerBoards = maps:put(PlayerPID, NewPlayerBoard,
+                                    maps:put(TargetPID, NewTargetBoard, PlayerBoards)),
+                    
+                    NewState = State#state{
+                        player_boards = NewPlayerBoards,
+                        discard_pile = CardsToDiscardFromBoard ++ State#state.discard_pile
+                    },
+                    
+                    {NewState, {ok, contagion_success}};
+                    
+                {error, Reason} ->
+                    {State, {error, Reason}}
+            end
     end.
+    
+
+can_contagion_happen(PlayerPID, State) ->
+    PlayerBoards = State#state.player_boards,
+    PlayerBoard = maps:get(PlayerPID, PlayerBoards),
+    OpponentBoards = maps:remove(PlayerPID, PlayerBoards),
+    
+    AvailableViruses = maps:fold(fun(_SlotColor, Slot, Acc) ->
+        case Slot#organ_slot.state of
+            -1 when Slot#organ_slot.cards /= [] ->
+                lists:foldl(fun(Card, InnerAcc) ->
+                    case Card#card.type of
+                        ?T_VIRUS ->
+                            VirusColor = Card#card.color,
+                            CurrentCount = maps:get(VirusColor, InnerAcc, 0),
+                            maps:put(VirusColor, CurrentCount + 1, InnerAcc);
+                        _ ->
+                            InnerAcc
+                    end
+                end, Acc, Slot#organ_slot.cards);
+            _ ->
+                Acc
+        end
+    end, ?COLOR_MAP, PlayerBoard),
+
+    AvailableOrgans = maps:fold(fun(_PID, TargetBoard, AccCounts) ->
+        maps:fold(fun(Color, Slot, InnerAccCounts) ->
+            case Slot#organ_slot.state of
+                1 ->
+                    CurrentCount = maps:get(Color, InnerAccCounts, 0),
+                    maps:put(Color, CurrentCount + 1, InnerAccCounts);
+                _ ->
+                    InnerAccCounts
+            end
+        end, AccCounts, TargetBoard)
+    end, ?COLOR_MAP, OpponentBoards),
+    
+    CanVirusInfectOrgan = maps:fold(fun(VirusColor, VirusCount, Acc) ->
+        case VirusCount > 0 of
+            false -> Acc;
+            true ->
+                case VirusColor of
+                    ?WILD ->
+                        Acc orelse maps:fold(fun(_OrgColor, OrgCount, InnerAcc) ->
+                            InnerAcc orelse (OrgCount > 0)
+                        end, false, AvailableOrgans);
+                    _ ->
+                        SameColorOrgans = maps:get(VirusColor, AvailableOrgans, 0),
+                        WildOrgans = maps:get(?WILD, AvailableOrgans, 0),
+                        Acc orelse (SameColorOrgans > 0) orelse (WildOrgans > 0)
+                end
+        end
+    end, false, AvailableViruses),
+
+    CanVirusInfectOrgan.
 
 init([]) ->
     io:format("~p: Game Manager iniciando...~n", [self()]),
@@ -396,13 +474,13 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
               "  Carta Jugada: ~p~n"
               "  Color de Referencia del Jugador/Origen: ~p~n"
               "  Color de Objetivo/Destino: ~p~n"
-              "-----------------------------------~n", 
+              "-----------------------------------~n~n~n~n~n~n", 
               [PlayerPID, TargetPID, Card, PlayerColor, TargetColor]),
     
     {StateAfterMove, Reply} = apply_move(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State), 
     
     case Reply of
-        {ok, _Played, CardsToDiscardFromLogic} ->
+        {ok, played, CardsToDiscardFromLogic} ->
         
             PlayerHand = maps:get(PlayerPID, StateAfterMove#state.player_hands),
             NewHand_NoPlayed = lists:delete(Card, PlayerHand), 
@@ -445,9 +523,70 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
                     broadcast_state(NewState),
                     {reply, {ok, game_over}, NewState}
             end;
+
+        {ok, contagion_played, CardsToDiscardFromLogic} ->
+            PlayerHand = maps:get(PlayerPID, StateAfterMove#state.player_hands),
+            NewHand_NoPlayed = lists:delete(Card, PlayerHand),
+            
+            AllCardsToDiscard = CardsToDiscardFromLogic,
+            NewDiscardPile_Temp = AllCardsToDiscard ++ StateAfterMove#state.discard_pile,
+            
+            Deck = StateAfterMove#state.deck,
+            {FinalDeck, [DrawnCard], FinalDiscardPile} = 
+                game_model:draw_cards(1, Deck, NewDiscardPile_Temp),
+
+            NewHand = [DrawnCard | NewHand_NoPlayed],
+            NewPlayerHands = maps:put(PlayerPID, NewHand, StateAfterMove#state.player_hands),
+
+            StateAfterDraw = StateAfterMove#state{
+                player_hands = NewPlayerHands,
+                deck = FinalDeck,
+                discard_pile = FinalDiscardPile
+            },
+
+            broadcast_state(StateAfterDraw),
+            {reply, {ok, contagion_phase}, StateAfterDraw};
             
         {error, _Reason} ->
             {reply, Reply, StateAfterMove}
+    end;
+
+handle_call({start_contagion, PlayerPID, TargetPID, PlayerColor, TargetColor}, _From, State) ->
+    IsPossible = can_contagion_happen(PlayerPID, State),
+
+    io:format("~n~n--- can_contagion_happen --- ~p~n~n",[IsPossible]),
+    case IsPossible of
+        false ->
+            {StateFinal, NextAction} = logic_end_turn(PlayerPID, State), % REVISAR
+            
+            case NextAction of
+                {next_turn, NextPlayerPID} ->
+                    NewState = StateFinal#state{
+                        current_player = NextPlayerPID,
+                        game_stage = action_phase
+                    },
+                    broadcast_state(NewState),
+                    gen_server:cast(self(), {start_turn_process, NextPlayerPID}),
+                    {reply, {error, no_contagion_possible}, NewState};
+                    
+                {game_over, WinnerPID} ->
+                    NewState = StateFinal#state{
+                        game_stage = {game_over, WinnerPID}
+                    },
+                    broadcast_state(NewState),
+                    {reply, {error, no_contagion_possible}, NewState}
+            end;
+            
+        true ->
+            {NewState, Result} = logic_contagion(PlayerPID, TargetPID, PlayerColor, TargetColor, State),
+            
+            case Result of
+                {ok, contagion_success} ->
+                    broadcast_state(NewState),
+                    {reply, {ok, contagion_phase}, NewState};
+                {error, Reason} ->
+                    {reply, {error, Reason}, NewState}
+            end
     end;
 
 handle_call({discard_cards, PlayerPID, CardsFromClient}, _From, State) ->
