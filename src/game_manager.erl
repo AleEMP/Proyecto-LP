@@ -51,8 +51,8 @@ start_game() ->
 discard_cards(PlayerPID, Cards) ->
     gen_server:call(game_manager, {discard_cards, PlayerPID, Cards}).
 
-contagion_step(PlayerPID, TargetPID, Color, SourceColor) ->
-    gen_server:call(game_manager, {contagion_step, PlayerPID, TargetPID, Color, SourceColor}).
+contagion_step(PlayerPID, TargetPID, SourceColor, Color) ->
+    gen_server:call(game_manager, {contagion_step, PlayerPID, TargetPID, SourceColor, Color}).
 
 initial_board() ->
     lists:foldl(fun(Color, Map) -> 
@@ -295,13 +295,12 @@ handle_call({play, PlayerPID, TargetPID, Card, PlayerColor, TargetColor}, _From,
             process_normal_play(PlayerPID, TargetPID, Card, PlayerColor, TargetColor, State)
     end;
 
-handle_call({contagion_step, PlayerPID, TargetPID, Color, SourceColor}, _From, State) ->
+handle_call({contagion_step, PlayerPID, TargetPID, SourceColor, Color}, _From, State) ->
     if State#state.game_stage /= contagion_phase ->
          {reply, {error, not_in_contagion_phase}, State};
        State#state.current_player /= PlayerPID ->
          {reply, {error, not_your_turn}, State};
        true ->
-         %% CAMBIO: Pasar SourceColor y Color al modelo
          case game_model:move_virus_card(PlayerPID, TargetPID, SourceColor, Color, State#state.player_boards) of
              {ok, NewBoards} ->
                  io:format(" -> [CONTAGIO] Virus movido de ~p (~p) a ~p (~p).~n", 

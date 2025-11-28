@@ -528,10 +528,7 @@ class VirusClient(arcade.Window):
                         return
                     target_color = clicked_slot['color']
                     target_pid = clicked_slot['pid']
-                    colors_match = (target_color == self.contagion_source_color)
-                    if not colors_match and not self.source_is_wild:
-                        self.status_text = "¡El color no coincide! (Necesitas virus comodín)"
-                        return
+                    
                     msg = {
                         "action": "contagion_step",
                         "target_pid": target_pid,

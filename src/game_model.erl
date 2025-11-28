@@ -126,10 +126,45 @@ is_valid_target_state(Card, TargetColor, CurrentBoard) ->
     CardType = Card#card.type,
     case CardType of
         ?T_ORGAN -> CurrentState == 0;
-        ?T_MEDICINE -> CurrentState /= 3 andalso CurrentState /= 0;
-        ?T_VIRUS -> CurrentState /= 3 andalso CurrentState /= 0;
+        ?T_MEDICINE -> CurrentState /= 3 andalso CurrentState /= 0 andalso is_valid_medicine_or_virus(Card, TargetColor, CurrentBoard);
+        ?T_VIRUS -> CurrentState /= 3 andalso CurrentState /= 0 andalso is_valid_medicine_or_virus(Card, TargetColor, CurrentBoard);
         ?T_TREATMENT -> true;
         _ -> false
+    end.
+
+is_valid_medicine_or_virus(Card, TargetColor, CurrentBoard) ->
+    CurrentSlot = maps:get(TargetColor, CurrentBoard), 
+    CurrentState = CurrentSlot#organ_slot.state, 
+    CurrentCards = CurrentSlot#organ_slot.cards,
+    CardType = Card#card.type,
+    
+    case CardType of
+        ?T_MEDICINE when CurrentState == -1 ->
+            VirusList = lists:filter(fun(C) -> C#card.type == ?T_VIRUS end, CurrentCards),
+            
+            case VirusList of
+                [VirusCard | _] -> 
+                    Card#card.color == VirusCard#card.color orelse 
+                    Card#card.color == ?WILD orelse 
+                    VirusCard#card.color == ?WILD;
+                [] -> 
+                    false
+            end;
+
+        ?T_VIRUS when CurrentState == 1 -> 
+            MedicineList = lists:filter(fun(C) -> C#card.type == ?T_MEDICINE end, CurrentCards),
+            
+            case MedicineList of
+                [MedicineCard | _] ->
+                    Card#card.color == MedicineCard#card.color orelse 
+                    Card#card.color == ?WILD orelse 
+                    MedicineCard#card.color == ?WILD;
+                [] ->
+                    true 
+            end;
+            
+        _ -> 
+            true 
     end.
 
 apply_card_to_board(Card, TargetColor, CurrentBoard) ->
@@ -243,14 +278,9 @@ take_exact_cards([CardToDiscard | RestCards], PlayerHand, Acc) ->
             take_exact_cards(RestCards, PlayerHand, Acc)
     end.
 
-%% ----------------------------------------------------
-%% LÓGICA DE CONTAGIO MEJORADA (Inteligente)
-%% ----------------------------------------------------
-
 can_contagion_happen(PlayerPID, PlayerBoards) ->
     MyBoard = maps:get(PlayerPID, PlayerBoards),
     
-    %% Recorremos mis slots buscando virus
     maps:fold(fun(SourceColor, MySlot, AnyMoveFound) ->
         if AnyMoveFound -> true;
            MySlot#organ_slot.state == -1 -> 
@@ -289,8 +319,8 @@ move_virus_card(PlayerPID, TargetPID, SourceColor, TargetColor, PlayerBoards) ->
     if not StatesOK -> {error, invalid_slot_state};
     true ->
         {VirusCard, RemainingCards} = remove_card_by_type(?T_VIRUS, MySlot#organ_slot.cards),
-        
-        ColorsMatch = (SourceColor == TargetColor),
+
+        ColorsMatch = (VirusCard#card.color == TargetColor),
         IsWildVirus = (VirusCard#card.color == ?WILD),
         IsWildTarget = (TargetColor == ?WILD), 
         

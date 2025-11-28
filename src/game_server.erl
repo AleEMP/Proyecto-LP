@@ -161,7 +161,7 @@ handle_json_from_client(Data, Socket) ->
             
             io:format("~p: Paso de contagio -> Target: ~p Color: ~p~n", [MyPID, TargetPID, Color]),
             
-            Result = game_manager:contagion_step(MyPID, TargetPID, Color, SourceColor),
+            Result = game_manager:contagion_step(MyPID, TargetPID, SourceColor, Color),
             
             case Result of
                 {ok, contagion_continue} -> send_json(Socket, #{action => <<"contagion_continue">>});
