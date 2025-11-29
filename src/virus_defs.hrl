@@ -1,4 +1,4 @@
-
+% Structures
 -record(card, {
     type,       
     color,     
@@ -53,6 +53,7 @@
 -define(N_LATEX_GLOVE,      latex_glove).     
 -define(N_MEDICAL_MISTAKE,  medical_mistake). 
 
+% Game Constants
 -define(STARTING_HAND_SIZE, 3).
 -define(MIN_PLAYERS, 2).
 -define(MAX_PLAYERS, 6).

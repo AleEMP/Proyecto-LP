@@ -11,14 +11,13 @@
     remove_card_by_type/2,
     apply_virus/2,
     take_exact_cards/3,
-    %% NUEVOS EXPORTS
     can_contagion_happen/2,
     move_virus_card/5
 ]).
 
 -include("virus_defs.hrl").
 
-%% ... (CREACIÓN DE MAZO Y BARAJADO IGUAL) ...
+
 create_organ_deck() ->
     [
         #card{type=?T_ORGAN, color=?RED,    name=?N_HEART,      quantity=5},

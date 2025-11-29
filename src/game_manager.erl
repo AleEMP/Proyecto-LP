@@ -3,7 +3,7 @@
 
 -export([
     start_link/0,
-    add_player/2, %% CAMBIO: Arity 2 para nickname
+    add_player/2,
     play_card/5,
     discard_cards/2,
     start_game/0,
@@ -29,7 +29,7 @@
     deck = [],
     discard_pile = [],
     players = [],
-    nicknames = #{}, %% CAMBIO: Guardar nombres
+    nicknames = #{},
     player_hands = #{},
     player_boards = #{}, 
     current_player = undefined, 
@@ -266,7 +266,7 @@ handle_call({add_player, PlayerPID, Nickname}, _From, State) ->
     true ->
         io:format("Jugador ~s (~p) unido al juego (~w/~w).~n", [Nickname, PlayerPID, CurrentCount + 1, ?MAX_PLAYERS]),
         NewPlayers = Players ++ [PlayerPID],
-        %% CAMBIO: Guardar nickname
+        
         NewNicknames = maps:put(PlayerPID, list_to_binary(Nickname), State#state.nicknames),
         NewState = State#state{players = NewPlayers, nicknames = NewNicknames},
         {reply, ok, NewState} 
@@ -397,12 +397,11 @@ convert_state_to_map(#state{ players = Players,
                              current_player = CurrentPlayer,
                              game_stage = GameStage,
                              discard_pile = DiscardPile,
-                             nicknames = Nicknames %% CAMBIO
+                             nicknames = Nicknames 
                            }) ->
     PlayerPIDs_Bin = [list_to_binary(pid_to_list(P)) || P <- Players],
     CurrentPlayer_Bin = list_to_binary(pid_to_list(CurrentPlayer)),
     
-    %% CAMBIO: Serializar nicknames
     NicknamesMap = maps:fold(fun(P, Name, Acc) -> 
         PidStr = list_to_binary(pid_to_list(P)),
         Acc#{PidStr => Name}
@@ -438,7 +437,6 @@ convert_state_to_map(#state{ players = Players,
                 'null' 
         end,
     
-    %% CAMBIO: FIX CRASH VICTORIA
     {StageNameBin, WinnerBin} = case GameStage of
         {game_over, WinnerPID} ->
             WBin = list_to_binary(pid_to_list(WinnerPID)),
@@ -449,7 +447,7 @@ convert_state_to_map(#state{ players = Players,
 
     #{
         players => PlayerPIDs_Bin,
-        nicknames => NicknamesMap, %% Agregado
+        nicknames => NicknamesMap,
         current_player => CurrentPlayer_Bin,
         game_stage => StageNameBin,
         winner => WinnerBin,
@@ -458,9 +456,6 @@ convert_state_to_map(#state{ players = Players,
         top_discard_card => TopDiscardCard
     }.
 
-%% ------------------------------------------------------------------
-%% HELPERS PRIVADOS
-%% ------------------------------------------------------------------
 
 handle_contagion_start(PlayerPID, Card, State) ->
     PlayerHand = maps:get(PlayerPID, State#state.player_hands),

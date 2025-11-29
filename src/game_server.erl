@@ -31,10 +31,10 @@ accept_loop(ListenSocket) ->
     
     accept_loop(ListenSocket). 
 
-client_handler(Socket) ->
-    %% --- HANDSHAKE DE LOGIN (CORREGIDO) ---
-    %% CAMBIO IMPORTANTE: Usamos 'infinity' en vez de 0.
-    %% Esperamos pacientemente a que el cliente envíe su nombre.
+    client_handler(Socket) ->
+        %% --- HANDSHAKE DE LOGIN (CORREGIDO) ---
+        %% CAMBIO IMPORTANTE: Usamos 'infinity' en vez de 0.
+        %% Esperamos pacientemente a que el cliente envíe su nombre.
     case gen_tcp:recv(Socket, 0, infinity) of
         {ok, Data} ->
             try jsx:decode(Data, [return_maps]) of
