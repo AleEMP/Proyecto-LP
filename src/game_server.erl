@@ -78,7 +78,6 @@ client_loop(Socket) ->
         ok
     end,
 
-    %% Aquí seguimos usando timeout 0 para hacer polling rápido y revisar el buzón (receive)
     case gen_tcp:recv(Socket, 0, 0) of
         {ok, Data} ->
             handle_json_from_client(Data, Socket),
