@@ -318,7 +318,7 @@ class VirusClient(arcade.Window):
 
         for i, card_data in enumerate(my_hand):
             x = start_x + i * (self.card_width + self.card_margin)
-            y = self.height * 0.1 # Mano abajo
+            y = self.height * 0.1 
             texture = self.get_card_texture(card_data)
             if texture:
                 card_sprite = arcade.Sprite()
