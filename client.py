@@ -91,7 +91,7 @@ class VirusClient(arcade.Window):
         self.game_state = {"hands": {}, "boards": {}, "players": [], "nicknames": {}}
         self.winner_pid = None
         
-        # --- VARIABLES DE LAYOUT ---
+        
         self.card_width = 60
         self.card_height = 85
         self.card_margin = 5
@@ -100,13 +100,13 @@ class VirusClient(arcade.Window):
         self.start_x = 350
         self.slot_spacing = 80
         
-        # --- VARIABLES DE FUENTE DINÁMICA ---
+        
         self.font_small = 10
         self.font_normal = 12
         self.font_medium = 14
         self.font_large = 18
-        self.font_huge = 54  # Game Over Title
-        self.font_icon = 80  # Game Over Icon
+        self.font_huge = 54  
+        self.font_icon = 80  
         
         self.player_hand_sprites = arcade.SpriteList()
         self.selected_card_indices = []
@@ -128,7 +128,7 @@ class VirusClient(arcade.Window):
         self.start_button.center_y = SCREEN_HEIGHT - 50
         self.start_button_list.append(self.start_button)
 
-    # Propiedad dinámica para el mazo de descarte
+
     @property
     def discard_pile_pos(self):
         return (self.width * 0.9, self.height * 0.5)
@@ -190,15 +190,15 @@ class VirusClient(arcade.Window):
         self.recalculate_layout()
         self.update_hand_sprites()
 
-    # --- LAYOUT Y TIPOGRAFÍA RESPONSIVA ---
+
     def recalculate_layout(self):
         num_players = len(self.game_state.get("players", []))
         if num_players == 0: num_players = 1
 
-        # Factor de escala basado en la altura (720p como base)
+
         scale_factor = self.height / 720.0
         
-        # Recalcular Fuentes
+        
         self.font_small = int(10 * scale_factor)
         self.font_normal = int(12 * scale_factor)
         self.font_medium = int(14 * scale_factor)
@@ -206,21 +206,18 @@ class VirusClient(arcade.Window):
         self.font_huge = int(54 * scale_factor)
         self.font_icon = int(80 * scale_factor)
 
-        # Recalcular Tamaños de Cartas
+
         if num_players <= 2:
-            # MODO GRANDE
             pct_height = 0.20 
             self.card_height = self.height * pct_height
             self.row_height = self.height * 0.30
             self.start_y = self.height * 0.35 
         elif num_players <= 4:
-            # MODO MEDIANO
             pct_height = 0.15
             self.card_height = self.height * pct_height
             self.row_height = self.height * 0.18
             self.start_y = self.height * 0.25
         else:
-            # MODO COMPACTO
             pct_height = 0.11
             self.card_height = self.height * pct_height
             self.row_height = self.height * 0.13
@@ -353,7 +350,7 @@ class VirusClient(arcade.Window):
             color = arcade.color.RED_DEVIL
             icon_text = "💀"
             
-        # Usamos las fuentes dinámicas
+            
         arcade.draw_text(main_text, self.width/2, self.height/2 + 50, 
                          color, self.font_huge, anchor_x="center", bold=True)
         arcade.draw_text(icon_text, self.width/2, self.height/2 + 150, 
@@ -391,10 +388,9 @@ class VirusClient(arcade.Window):
                 border_width=border_width
             )
 
-        # Texto de estado (Fuente Grande)
+
         turno_text = "¡TU TURNO!" if self.is_my_turn else "Esperando..."
         arcade.draw_text(f"Estado: {turno_text}", 20, self.height - 40, arcade.color.WHITE, self.font_large)
-        # Texto de detalles (Fuente Media)
         arcade.draw_text(self.status_text, 20, self.height - 70, arcade.color.CYAN, self.font_medium)
         
         if self.selected_card_data:
@@ -425,7 +421,7 @@ class VirusClient(arcade.Window):
                 color_text = arcade.color.YELLOW
                 nickname += " (TURNO)"
             
-            # Nombre del jugador (Fuente Normal)
+            
             arcade.draw_text(nickname, 20, base_y, color_text, self.font_normal, anchor_y="center")
 
             for color_name in ["red", "green", "blue", "yellow", "wild"]:
