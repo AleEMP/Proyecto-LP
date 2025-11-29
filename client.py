@@ -6,7 +6,7 @@ import struct
 import time
 from pathlib import Path 
 
-# Tamaño inicial
+
 SCREEN_WIDTH = 1280
 SCREEN_HEIGHT = 720
 SCREEN_TITLE = "Virus (Erlang + Arcade)"
